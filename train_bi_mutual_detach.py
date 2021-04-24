@@ -12,7 +12,6 @@ import torch.backends.cudnn as cudnn
 import wandb
 
 cudnn.benchmark = True
-GPU_double = 2
 
 # set seed for reproducibility
 torch.manual_seed(0)
@@ -24,16 +23,13 @@ parser.add_argument('--model', default="resnet18", type=str, help="resnet18|resn
                                                                   "wideresnet50|wideresnet101|resnext50|resnext101")
 parser.add_argument('--dataset', default="cifar100", type=str, help="cifar100|cifar10")
 # default 250 epoch
-parser.add_argument('--epoch', default=250, type=int, help="training epochs")
-parser.add_argument('--loss_coefficient', default=0.1, type=float)
+parser.add_argument('--epoch', default=300, type=int, help="training epochs")
+parser.add_argument('--loss_coefficient', default=0.3, type=float)
 parser.add_argument('--feature_loss_coefficient', default=0.03, type=float)
 parser.add_argument('--dataset_path', default="data", type=str)
-
 parser.add_argument('--autoaugment', default=True, type=bool)
-# parser.add_argument('--autoaugment', default=False, type=bool)
-
 parser.add_argument('--temperature', default=3.0, type=float)
-parser.add_argument('--batchsize', default=128 * GPU_double, type=int)
+parser.add_argument('--batchsize', default=128 * 2, type=int)
 parser.add_argument('--init_lr', default=0.1, type=float)
 args = parser.parse_args()
 print(args)
@@ -138,7 +134,7 @@ optimizer = optim.SGD(net.parameters(), lr=args.init_lr, weight_decay=5e-4, mome
 def train(epoch):
     correct = [0 for _ in range(5)]
     predicted = [0 for _ in range(5)]
-    if epoch in [90, 160, 200,245]:
+    if epoch in [90, 160, 210,260]:
         for param_group in optimizer.param_groups:
             param_group['lr'] /= 10
     net.train()
@@ -154,15 +150,18 @@ def train(epoch):
         #   compute loss
         loss = torch.FloatTensor([0.]).to(device)
 
-        # using out1 and out4 as teacher per epoch
         #   teacher: -temp: swap; -temp: out4; -further: random; -further: mutual
         # further er : distill by ensemble
-        for index in range(len(outputs)):
-            #   logits distillation
-            loss += kl_distill(outputs[index], ensemble) * args.loss_coefficient
+        #   for out4 classifier
 
-            # loss += criterion(outputs[index], labels)  change the parameters to see the result
-            loss += criterion(outputs[index], labels) * (1 - args.loss_coefficient)
+        for output in outputs:
+            loss += criterion(output, labels) * (1 - args.loss_coefficient)
+
+            for other in outputs:
+                if other is not output:
+                    #   logits distillation
+                    loss += kl_distill(output, other.detach()) * args.loss_coefficient/(len(outputs)-1)
+
 
         sum_loss += loss.item()
         optimizer.zero_grad()
@@ -232,4 +231,4 @@ if __name__ == "__main__":
         train(epoch)
         test(epoch)
     print("Training Finished, TotalEPOCH=%d, Best Accuracy=%.4f, Best Single=%.4f" % (
-        args.epoch, 100 * best_acc, 100 * best_single))
+    args.epoch, 100 * best_acc, 100 * best_single))

@@ -154,16 +154,14 @@ def train(epoch):
         #   compute loss
         loss = torch.FloatTensor([0.]).to(device)
 
+        # using out1 and out4 as teacher per epoch
         #   teacher: -temp: swap; -temp: out4; -further: random; -further: mutual
         # further er : distill by ensemble
-        #   for out4 classifier
-        loss += criterion(outputs[0], labels)
-
-
-        # for other
-        for index in range(1, len(outputs)):
+        for index in range(len(outputs)):
             #   logits distillation
-            loss += kl_distill(outputs[index], teacher_output) * args.loss_coefficient
+            loss += kl_distill(outputs[index], ensemble) * args.loss_coefficient
+
+            # loss += criterion(outputs[index], labels)  change the parameters to see the result
             loss += criterion(outputs[index], labels) * (1 - args.loss_coefficient)
 
         sum_loss += loss.item()
@@ -177,14 +175,14 @@ def train(epoch):
         for classifier_index in range(len(outputs)):
             _, predicted[classifier_index] = torch.max(outputs[classifier_index].data, 1)
             correct[classifier_index] += float(predicted[classifier_index].eq(labels.data).cpu().sum())
-        if i % 80 == 79:
-            print('[epoch:%d, iter:%d] Loss: %.03f | Acc: 4/4: %.2f%% 3/4: %.2f%% 2/4: %.2f%%  1/4: %.2f%%'
-                  ' Ensemble: %.2f%%' % (epoch, (i + epoch * length), sum_loss / (i + 1),
-                                         100 * correct[0] / total, 100 * correct[1] / total,
-                                         100 * correct[2] / total, 100 * correct[3] / total,
-                                         100 * correct[4] / total))
-    wandb.log({'train_acc': 100. * correct[4] / total, 'train_acc1': 100. * correct[0] / total,
-               'train_acc4': 100. * correct[3] / total, 'train_loss': sum_loss})
+    #     if i % 80 == 79:
+    #         print('[epoch:%d, iter:%d] Loss: %.03f | Acc: 4/4: %.2f%% 3/4: %.2f%% 2/4: %.2f%%  1/4: %.2f%%'
+    #               ' Ensemble: %.2f%%' % (epoch, (i + epoch * length), sum_loss / (i + 1),
+    #                                      100 * correct[0] / total, 100 * correct[1] / total,
+    #                                      100 * correct[2] / total, 100 * correct[3] / total,
+    #                                      100 * correct[4] / total))
+    # wandb.log({'train_acc': 100. * correct[4] / total, 'train_acc1': 100. * correct[0] / total,
+    #            'train_acc4': 100. * correct[3] / total, 'train_loss': sum_loss})
 
 
 def test(epoch):
@@ -204,34 +202,34 @@ def test(epoch):
                 correct[classifier_index] += float(predicted[classifier_index].eq(labels.data).cpu().sum())
             total += float(labels.size(0))
 
-        print('Test Set AccuracyAcc: 4/4: %.4f%% 3/4: %.4f%% 2/4: %.4f%%  1/4: %.4f%%'
-              ' Ensemble: %.4f%%' % (100 * correct[0] / total, 100 * correct[1] / total,
-                                     100 * correct[2] / total, 100 * correct[3] / total,
-                                     100 * correct[4] / total))
-        wandb.log({'test_acc': 100. * correct[4] / total, 'test_acc1': 100. * correct[0] / total,
-                   'test_acc4': 100. * correct[3] / total})
+        # print('Test Set AccuracyAcc: 4/4: %.4f%% 3/4: %.4f%% 2/4: %.4f%%  1/4: %.4f%%'
+        #       ' Ensemble: %.4f%%' % (100 * correct[0] / total, 100 * correct[1] / total,
+        #                              100 * correct[2] / total, 100 * correct[3] / total,
+        #                              100 * correct[4] / total))
+        # wandb.log({'test_acc': 100. * correct[4] / total, 'test_acc1': 100. * correct[0] / total,
+        #            'test_acc4': 100. * correct[3] / total})
 
         global best_single, best_acc
         if correct[4] / total > best_acc:
             best_acc = correct[4] / total
-            print("Best Accuracy Updated: ", best_acc * 100)
-            torch.save(net.state_dict(), "./checkpoints/" + str(args.model) + ".pth")
+            # print("Best Accuracy Updated: ", best_acc * 100)
+            # torch.save(net.state_dict(), "./checkpoints/" + str(args.model) + ".pth")
         for i in range(4):
             if correct[i] / total > best_single:
                 best_single = correct[i] / total
-                print("Best Single Accuracy Updated: ", best_single * 100)
-                torch.save(net.state_dict(), "./checkpoints/" + str(args.model) + ".pth")
+                # print("Best Single Accuracy Updated: ", best_single * 100)
+                # torch.save(net.state_dict(), "./checkpoints/" + str(args.model) + ".pth")
     # scheduler.step()
     # print('lr:', scheduler.get_last_lr())
-    print()
 
 
 if __name__ == "__main__":
     best_acc = 0
     best_single = 0
-    wandb.init(project="distill")
+    # wandb.init(project="distill")
     for epoch in range(args.epoch):
         train(epoch)
         test(epoch)
     print("Training Finished, TotalEPOCH=%d, Best Accuracy=%.4f, Best Single=%.4f" % (
-    args.epoch, 100 * best_acc, 100 * best_single))
+        args.epoch, 100 * best_acc, 100 * best_single))
+    print()
