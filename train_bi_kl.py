@@ -9,7 +9,6 @@ import torch.nn.functional as F
 from autoaugment import CIFAR10Policy
 from cutout import Cutout
 import torch.backends.cudnn as cudnn
-import random
 
 cudnn.benchmark=True
 GPU_double=2
@@ -38,11 +37,22 @@ parser.add_argument('--init_lr', default=0.1, type=float)
 args = parser.parse_args()
 print(args)
 
-def CrossEntropy(outputs, targets):
-    log_softmax_outputs = F.log_softmax(outputs/args.temperature, dim=1)
-    softmax_targets = F.softmax(targets/args.temperature, dim=1)
-    return -(log_softmax_outputs * softmax_targets).sum(dim=1).mean()
+# def CrossEntropy(outputs, targets):
+#     log_softmax_outputs = F.log_softmax(outputs/args.temperature, dim=1)
+#     softmax_targets = F.softmax(targets/args.temperature, dim=1)
+#     return -(log_softmax_outputs * softmax_targets).sum(dim=1).mean()
 
+class DistillKL(nn.Module):
+    """Distilling the Knowledge in a Neural Network"""
+    def __init__(self, T):
+        super(DistillKL, self).__init__()
+        self.T = T
+
+    def forward(self, y_s, y_t):
+        p_s = F.log_softmax(y_s/self.T, dim=1)
+        p_t = F.softmax(y_t/self.T, dim=1)
+        loss = F.kl_div(p_s, p_t, size_average=False) * (self.T**2) / y_s.shape[0]
+        return loss
 
 if args.autoaugment:
     transform_train = transforms.Compose([transforms.RandomCrop(32, padding=4, fill=128),
@@ -120,6 +130,7 @@ if args.model == "resnext101_32x8d":
 net.to(device)
 net = torch.nn.DataParallel(net)
 criterion = nn.CrossEntropyLoss()
+kl_distill = DistillKL(args.temperature)
 optimizer = optim.SGD(net.parameters(), lr=args.init_lr, weight_decay=5e-4, momentum=0.9)
 # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=200)
 # init = False
@@ -127,7 +138,6 @@ optimizer = optim.SGD(net.parameters(), lr=args.init_lr, weight_decay=5e-4, mome
 if __name__ == "__main__":
     best_acc = 0
     best_single=0
-    switch = False
     for epoch in range(args.epoch):
         correct = [0 for _ in range(5)]
         predicted = [0 for _ in range(5)]
@@ -165,10 +175,8 @@ if __name__ == "__main__":
             loss = torch.FloatTensor([0.]).to(device)
 
             # using out1 and out4 as teacher per epoch
-            # if i%5==0:
-            #     switch = not switch
-            # if switch:
-            #     outputs[0],outputs[3] = outputs[3],outputs[0]
+            if epoch%2==0:
+                outputs[0],outputs[3] = outputs[3],outputs[0]
             #   teacher: -temp: swap; -temp: out4; -further: random; -further: mutual
             # further er : distill by ensemble
             #   for out4 classifier
@@ -180,7 +188,7 @@ if __name__ == "__main__":
             # for other
             for index in range(1, len(outputs)):
                 #   logits distillation
-                loss += CrossEntropy(outputs[index], teacher_output) * args.loss_coefficient
+                loss += kl_distill(outputs[index], teacher_output) * args.loss_coefficient
                 loss += criterion(outputs[index], labels) * (1 - args.loss_coefficient)
                 #   feature distillation
                 # if index != 1:

@@ -9,7 +9,6 @@ import torch.nn.functional as F
 from autoaugment import CIFAR10Policy
 from cutout import Cutout
 import torch.backends.cudnn as cudnn
-import random
 
 cudnn.benchmark=True
 GPU_double=2
@@ -127,7 +126,6 @@ optimizer = optim.SGD(net.parameters(), lr=args.init_lr, weight_decay=5e-4, mome
 if __name__ == "__main__":
     best_acc = 0
     best_single=0
-    switch = False
     for epoch in range(args.epoch):
         correct = [0 for _ in range(5)]
         predicted = [0 for _ in range(5)]
@@ -165,10 +163,8 @@ if __name__ == "__main__":
             loss = torch.FloatTensor([0.]).to(device)
 
             # using out1 and out4 as teacher per epoch
-            # if i%5==0:
-            #     switch = not switch
-            # if switch:
-            #     outputs[0],outputs[3] = outputs[3],outputs[0]
+            if epoch%2==0:
+                outputs[0],outputs[3] = outputs[3],outputs[0]
             #   teacher: -temp: swap; -temp: out4; -further: random; -further: mutual
             # further er : distill by ensemble
             #   for out4 classifier

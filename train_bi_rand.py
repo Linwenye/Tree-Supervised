@@ -127,11 +127,10 @@ optimizer = optim.SGD(net.parameters(), lr=args.init_lr, weight_decay=5e-4, mome
 if __name__ == "__main__":
     best_acc = 0
     best_single=0
-    switch = False
     for epoch in range(args.epoch):
         correct = [0 for _ in range(5)]
         predicted = [0 for _ in range(5)]
-        if epoch in [args.epoch // 3, args.epoch * 2 // 3, args.epoch - 10]:
+        if epoch in [90, 160, 200, 245]:
             for param_group in optimizer.param_groups:
                 param_group['lr'] /= 10
         net.train()
@@ -144,31 +143,12 @@ if __name__ == "__main__":
             ensemble = sum(outputs)/len(outputs)
             ensemble.detach_()
 
-            # if init is False:
-            #     #   init the adaptation layers.
-            #     #   we add feature adaptation layers here to soften the influence from feature distillation loss
-            #     #   the feature distillation in our conference version :  | f1-f2 | ^ 2
-            #     #   the feature distillation in the final version : |Fully Connected Layer(f1) - f2 | ^ 2
-            #
-            #     layer_list = []
-            #     teacher_feature_size = outputs_feature[0].size(1)
-            #     for index in range(1, len(outputs_feature)):
-            #         student_feature_size = outputs_feature[index].size(1)
-            #         layer_list.append(nn.Linear(student_feature_size, teacher_feature_size))
-            #     net.adaptation_layers = nn.ModuleList(layer_list)
-            #     net.adaptation_layers.cuda()
-            #     optimizer = optim.SGD(net.parameters(), lr=args.init_lr, weight_decay=5e-4, momentum=0.9)
-            #     #   define the optimizer here again so it will optimize the net.adaptation_layers
-            #     init = True
-
             #   compute loss
             loss = torch.FloatTensor([0.]).to(device)
 
             # using out1 and out4 as teacher per epoch
-            # if i%5==0:
-            #     switch = not switch
-            # if switch:
-            #     outputs[0],outputs[3] = outputs[3],outputs[0]
+            rand_t = random.randint(0,3)
+            outputs[0],outputs[rand_t] = outputs[rand_t],outputs[0]
             #   teacher: -temp: swap; -temp: out4; -further: random; -further: mutual
             # further er : distill by ensemble
             #   for out4 classifier
