@@ -249,7 +249,7 @@ class BiResNet(nn.Module):
         self.layer3 = self._make_layer(block, 256, num_blocks[2], stride=2)
         self.layer4 = self._make_layer(block, 512, num_blocks[3], stride=2)
 
-        self.in_planes = 64 # redefine to fix the re-making layer shape error
+        self.in_planes = 64  # redefine to fix the re-making layer shape error
         self.layer1_ = self._make_layer(block, 64, num_blocks[0], stride=1)
         self.layer2_ = self._make_layer(block, 128, num_blocks[1], stride=2)
         self.layer3_ = self._make_layer(block, 256, num_blocks[2], stride=2)
@@ -320,7 +320,7 @@ class BiResNet_multibranch(nn.Module):
         self.layer3 = self._make_layer(block, 256, num_blocks[2], stride=2)
         self.layer4 = self._make_layer(block, 512, num_blocks[3], stride=2)
 
-        self.in_planes = 64 # redefine to fix the re-making layer shape error
+        self.in_planes = 64  # redefine to fix the re-making layer shape error
         self.layer1_ = self._make_layer(block, 64, num_blocks[0], stride=1)
         self.layer2_ = self._make_layer(block, 128, num_blocks[1], stride=2)
         self.layer3_ = self._make_layer(block, 256, num_blocks[2], stride=2)
@@ -390,7 +390,7 @@ class BiResNet_detach(nn.Module):
         self.layer3 = self._make_layer(block, 256, num_blocks[2], stride=2)
         self.layer4 = self._make_layer(block, 512, num_blocks[3], stride=2)
 
-        self.in_planes = 64 # redefine to fix the re-making layer shape error
+        self.in_planes = 64  # redefine to fix the re-making layer shape error
         self.layer1_ = self._make_layer(block, 64, num_blocks[0], stride=1)
         self.layer2_ = self._make_layer(block, 128, num_blocks[1], stride=2)
         self.layer3_ = self._make_layer(block, 256, num_blocks[2], stride=2)
@@ -463,6 +463,83 @@ class BiResNet_detach(nn.Module):
         return [out4, out3, out2, out1], [out4_feature, out3_feature, out2_feature, out1_feature]
 
 
+class TreeCifarResNet_v1(nn.Module):
+    def __init__(self, block, num_blocks, num_classes=10, image_channels=3, batchnorm=True):
+        """layer 1 as root version"""
+        super(TreeCifarResNet_v1, self).__init__()
+        if batchnorm:
+            self.conv1 = nn.Conv2d(image_channels, 16, kernel_size=3, stride=1, padding=1, bias=False)
+            self.bn1 = nn.BatchNorm2d(16)
+        else:
+            self.conv1 = nn.Conv2d(image_channels, 16, kernel_size=3, stride=1, padding=1, bias=True)
+            self.bn1 = nn.Sequential()
+        self.layer1 = nn.ModuleList([self._make_blocks(block, 16, 16, num_blocks[0], stride=1)])
+        self.layer2 = nn.ModuleList([self._make_blocks(block, 16, 32, num_blocks[1], stride=2) for _ in range(2)])
+        self.layer3 = nn.ModuleList([self._make_blocks(block, 32, 64, num_blocks[2], stride=2) for _ in range(4)])
+        self.linears = nn.ModuleList([nn.Linear(64 * block.expansion, num_classes) for _ in range(4)])
+
+    def _make_blocks(self, block, in_planes, out_planes, num_blocks, stride):
+        layers = []
+        layers.append(block(in_planes, out_planes, stride))
+        for i in range(num_blocks - 1):
+            layers.append(block(out_planes, out_planes, 1))
+        return nn.Sequential(*layers)
+
+    def forward(self, x):
+        out = F.relu(self.bn1(self.conv1(x)))
+        out = self.layer1[0](out)
+        out1 = self.layer2[0](out)
+        out3 = self.layer2[1](out)
+
+        out2 = self.layer3[1](out1)
+        out1 = self.layer3[0](out1)
+        out4 = self.layer3[3](out3)
+        out3 = self.layer3[2](out3)
+        # out = self.layer3(out)
+        res = [out1, out2, out3, out4]
+        for i in range(len(res)):
+            res[i] = F.avg_pool2d(res[i], 8)
+            res[i] = res[i].view(res[i].size(0), -1)
+            res[i] = self.linears[i](res[i])
+        return res
+
+
+# class TreeCifarResNet_v2(nn.Module):
+#     def __init__(self, block, num_blocks, num_classes=10, image_channels=3, batchnorm=True):
+#         """conv1 as root version"""
+#         super(TreeCifarResNetv2, self).__init__()
+#         self.in_planes = 16
+#         if batchnorm:
+#             self.conv1 = nn.Conv2d(image_channels, 16, kernel_size=3, stride=1, padding=1, bias=False)
+#             self.bn1 = nn.BatchNorm2d(16)
+#         else:
+#             self.conv1 = nn.Conv2d(image_channels, 16, kernel_size=3, stride=1, padding=1, bias=True)
+#             self.bn1 = nn.Sequential()
+#         self.layer1 = [self._make_blocks(block, 16, num_blocks[0], stride=1)]
+#         self.layer2 = [self._make_blocks(block, 32, num_blocks[1], stride=2)]
+#         self.layer3 = self._make_blocks(block, 64, num_blocks[2], stride=2)
+#         self.linear = nn.Linear(64 * block.expansion, num_classes)
+#
+#     def _make_blocks(self, block, in_planes, out_planes, num_blocks, stride):
+#         layers = []
+#         layers.append(block(in_planes, out_planes, stride))
+#         for i in range(num_blocks - 1):
+#             layers.append(block(out_planes, out_planes, 1))
+#         return nn.Sequential(*layers)
+#
+#     def forward(self, x):
+#         out = F.relu(self.bn1(self.conv1(x)))
+#         out = self.layer1(out)
+#         out = self.layer2(out)
+#         out = self.layer3(out)
+#         out = F.avg_pool2d(out, 8)
+#         out = out.view(out.size(0), -1)
+#         out = self.linear(out)
+#         return out
+#
+#     def _forward(self, x, res):
+
+
 class CifarResNet(nn.Module):
     def __init__(self, block, num_blocks, num_classes=10, image_channels=3, batchnorm=True):
         super(CifarResNet, self).__init__()
@@ -513,12 +590,17 @@ def CifarResNet56(num_classes):
     return CifarResNet(Bottleneck, [9, 9, 9], num_classes)
 
 
+def TreeCifarResNet32_v1(num_classes):
+    return TreeCifarResNet_v1(BasicBlock, [5, 5, 5], num_classes)
+
+
 def ResNet18(num_classes):
     return ResNet(BasicBlock, [2, 2, 2, 2], num_classes)
 
 
 def BiResNet18(num_classes):
     return BiResNet(BasicBlock, [2, 2, 2, 2], num_classes)
+
 
 def BiResNet_detach18(num_classes):
     return BiResNet_detach(BasicBlock, [2, 2, 2, 2], num_classes)
@@ -541,8 +623,11 @@ def ResNet152():
 
 
 def test():
-    net = BiResNet18(100)
+    # net = BiResNet18(100)
+    net = TreeCifarResNet32_v1(100)
+    print(net)
     y = net(torch.randn(1, 3, 32, 32))
+
     print(y[0][0].size())
 
 

@@ -12,7 +12,6 @@ import torch.backends.cudnn as cudnn
 import wandb
 
 cudnn.benchmark = True
-GPU_double = 2
 
 # set seed for reproducibility
 torch.manual_seed(0)
@@ -20,20 +19,20 @@ torch.manual_seed(0)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 parser = argparse.ArgumentParser(description='Self-Distillation CIFAR Training')
-parser.add_argument('--model', default="resnet18", type=str, help="resnet18|resnet34|resnet50|resnet101|resnet152|"
+parser.add_argument('--model', default="tree_resnet32", type=str, help="resnet18|resnet34|resnet50|resnet101|resnet152|"
                                                                   "wideresnet50|wideresnet101|resnext50|resnext101")
 parser.add_argument('--dataset', default="cifar100", type=str, help="cifar100|cifar10")
 # default 250 epoch
-parser.add_argument('--epoch', default=250, type=int, help="training epochs")
+parser.add_argument('--epoch', default=270, type=int, help="training epochs")
 parser.add_argument('--loss_coefficient', default=0.3, type=float)
 parser.add_argument('--feature_loss_coefficient', default=0.03, type=float)
 parser.add_argument('--dataset_path', default="data", type=str)
 
-parser.add_argument('--autoaugment', default=True, type=bool)
-# parser.add_argument('--autoaugment', default=False, type=bool)
+# parser.add_argument('--autoaugment', default=True, type=bool)
+parser.add_argument('--autoaugment', default=False, type=bool)
 
 parser.add_argument('--temperature', default=3.0, type=float)
-parser.add_argument('--batchsize', default=128 * GPU_double, type=int)
+parser.add_argument('--batchsize', default=128 * 2, type=int)
 parser.add_argument('--init_lr', default=0.1, type=float)
 args = parser.parse_args()
 print(args)
@@ -81,6 +80,7 @@ if args.dataset == "cifar100":
         download=True,
         transform=transform_test
     )
+    num_class = 100
 elif args.dataset == "cifar10":
     trainset = torchvision.datasets.CIFAR10(
         root=args.dataset_path,
@@ -94,6 +94,7 @@ elif args.dataset == "cifar10":
         download=True,
         transform=transform_test
     )
+    num_class = 10
 trainloader = torch.utils.data.DataLoader(
     trainset,
     batch_size=args.batchsize,
@@ -107,24 +108,10 @@ testloader = torch.utils.data.DataLoader(
     num_workers=4
 )
 
-if args.model == "resnet18":
-    net = BiResNet18(100)
-if args.model == "resnet34":
-    net = resnet34()
-if args.model == "resnet50":
-    net = resnet50()
-if args.model == "resnet101":
-    net = resnet101()
-if args.model == "resnet152":
-    net = resnet152()
-if args.model == "wideresnet50":
-    net = wide_resnet50_2()
-if args.model == "wideresnet101":
-    net = wide_resnet101_2()
-if args.model == "resnext50_32x4d":
-    net = resnet18()
-if args.model == "resnext101_32x8d":
-    net = resnext101_32x8d()
+# if args.model == "tree_resnet":
+net = TreeCifarResNet32_v1(num_class)
+# if args.model == "resnet32":
+#     net = CifarResNet32(num_class)
 
 net.to(device)
 net = torch.nn.DataParallel(net)
@@ -138,8 +125,7 @@ optimizer = optim.SGD(net.parameters(), lr=args.init_lr, weight_decay=5e-4, mome
 def train(epoch):
     correct = [0 for _ in range(5)]
     predicted = [0 for _ in range(5)]
-    if epoch in [90, 160, 210,250]:
-
+    if epoch in epoch_down:
         for param_group in optimizer.param_groups:
             param_group['lr'] /= 10
     net.train()
@@ -148,28 +134,25 @@ def train(epoch):
         length = len(trainloader)
         inputs, labels = data
         inputs, labels = inputs.to(device), labels.to(device)
-        outputs, outputs_feature = net(inputs)
+        outputs= net(inputs)
         ensemble = sum(outputs) / len(outputs)
         ensemble.detach_()
 
         #   compute loss
         loss = torch.FloatTensor([0.]).to(device)
 
-        # using out1 and out4 as teacher per epoch
-        if epoch % 2 == 0:
-            outputs[0], outputs[3] = outputs[3], outputs[0]
         #   teacher: -temp: swap; -temp: out4; -further: random; -further: mutual
         # further er : distill by ensemble
         #   for out4 classifier
-        loss += criterion(outputs[0], labels)
 
-        teacher_output = outputs[0].detach()
+        for output in outputs:
+            loss += criterion(output, labels) * (1 - args.loss_coefficient)
 
-        # for other
-        for index in range(1, len(outputs)):
-            #   logits distillation
-            loss += kl_distill(outputs[index], teacher_output) * args.loss_coefficient
-            loss += criterion(outputs[index], labels) * (1 - args.loss_coefficient)
+            for other in outputs:
+                if other is not output:
+                    #   logits distillation
+                    loss += kl_distill(output, other) * args.loss_coefficient/(len(outputs)-1)
+
 
         sum_loss += loss.item()
         optimizer.zero_grad()
@@ -182,12 +165,12 @@ def train(epoch):
         for classifier_index in range(len(outputs)):
             _, predicted[classifier_index] = torch.max(outputs[classifier_index].data, 1)
             correct[classifier_index] += float(predicted[classifier_index].eq(labels.data).cpu().sum())
-        # if i % 80 == 79:
-        #     print('[epoch:%d, iter:%d] Loss: %.03f | Acc: 4/4: %.2f%% 3/4: %.2f%% 2/4: %.2f%%  1/4: %.2f%%'
-        #           ' Ensemble: %.2f%%' % (epoch, (i + epoch * length), sum_loss / (i + 1),
-        #                                  100 * correct[0] / total, 100 * correct[1] / total,
-        #                                  100 * correct[2] / total, 100 * correct[3] / total,
-        #                                  100 * correct[4] / total))
+        if i % 80 == 79:
+            print('[epoch:%d, iter:%d] Loss: %.03f | Acc: 4/4: %.2f%% 3/4: %.2f%% 2/4: %.2f%%  1/4: %.2f%%'
+                  ' Ensemble: %.2f%%' % (epoch, (i + epoch * length), sum_loss / (i + 1),
+                                         100 * correct[0] / total, 100 * correct[1] / total,
+                                         100 * correct[2] / total, 100 * correct[3] / total,
+                                         100 * correct[4] / total))
     wandb.log({'train_acc': 100. * correct[4] / total, 'train_acc1': 100. * correct[0] / total,
                'train_acc4': 100. * correct[3] / total, 'train_loss': sum_loss})
 
@@ -201,7 +184,7 @@ def test(epoch):
             net.eval()
             images, labels = data
             images, labels = images.to(device), labels.to(device)
-            outputs, outputs_feature = net(images)
+            outputs= net(images)
             ensemble = sum(outputs) / len(outputs)
             outputs.append(ensemble)
             for classifier_index in range(len(outputs)):
@@ -219,24 +202,29 @@ def test(epoch):
         global best_single, best_acc
         if correct[4] / total > best_acc:
             best_acc = correct[4] / total
-            # print("Best Accuracy Updated: ", best_acc * 100)
+            print("Best Accuracy Updated: ", best_acc * 100)
             torch.save(net.state_dict(), "./checkpoints/" + str(args.model) + ".pth")
         for i in range(4):
             if correct[i] / total > best_single:
                 best_single = correct[i] / total
-                # print("Best Single Accuracy Updated: ", best_single * 100)
+                print("Best Single Accuracy Updated: ", best_single * 100)
                 torch.save(net.state_dict(), "./checkpoints/" + str(args.model) + ".pth")
     # scheduler.step()
     # print('lr:', scheduler.get_last_lr())
+    print()
 
 
 if __name__ == "__main__":
     best_acc = 0
     best_single = 0
     wandb.init(project="distill")
+    if args.autoaugment==False:
+        args.epoch=200
+        epoch_down = [60,120,180]
+    else:
+        epoch_down = [90, 160, 210,250]
     for epoch in range(args.epoch):
         train(epoch)
         test(epoch)
-    print("Training Finished, temperature=%d, loss_co=%.2f, Best Accuracy=%.4f, Best Single=%.4f" % (
-        args.temperature, args.loss_coefficient, 100 * best_acc, 100 * best_single))
-    print()
+    print("Training Finished, TotalEPOCH=%d, Best Accuracy=%.4f, Best Single=%.4f" % (
+    args.epoch, 100 * best_acc, 100 * best_single))

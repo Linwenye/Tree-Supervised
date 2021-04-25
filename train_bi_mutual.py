@@ -12,7 +12,6 @@ import torch.backends.cudnn as cudnn
 import wandb
 
 cudnn.benchmark = True
-GPU_double = 1
 
 # set seed for reproducibility
 torch.manual_seed(0)
@@ -33,7 +32,7 @@ parser.add_argument('--autoaugment', default=True, type=bool)
 # parser.add_argument('--autoaugment', default=False, type=bool)
 
 parser.add_argument('--temperature', default=3.0, type=float)
-parser.add_argument('--batchsize', default=128 * GPU_double, type=int)
+parser.add_argument('--batchsize', default=128 * 2, type=int)
 parser.add_argument('--init_lr', default=0.1, type=float)
 args = parser.parse_args()
 print(args)
@@ -81,6 +80,7 @@ if args.dataset == "cifar100":
         download=True,
         transform=transform_test
     )
+    num_class = 100
 elif args.dataset == "cifar10":
     trainset = torchvision.datasets.CIFAR10(
         root=args.dataset_path,
@@ -94,6 +94,7 @@ elif args.dataset == "cifar10":
         download=True,
         transform=transform_test
     )
+    num_class = 10
 trainloader = torch.utils.data.DataLoader(
     trainset,
     batch_size=args.batchsize,
@@ -108,7 +109,7 @@ testloader = torch.utils.data.DataLoader(
 )
 
 if args.model == "resnet18":
-    net = BiResNet18(100)
+    net = BiResNet18(num_class)
 if args.model == "resnet34":
     net = resnet34()
 if args.model == "resnet50":
