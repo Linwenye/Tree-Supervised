@@ -24,7 +24,7 @@ parser.add_argument('--model', default="resnet18", type=str, help="resnet18|resn
                                                                   "wideresnet50|wideresnet101|resnext50|resnext101")
 parser.add_argument('--dataset', default="cifar100", type=str, help="cifar100|cifar10")
 # default 250 epoch
-parser.add_argument('--epoch', default=300, type=int, help="training epochs")
+parser.add_argument('--epoch', default=350, type=int, help="training epochs")
 parser.add_argument('--loss_coefficient', default=0.3, type=float)
 parser.add_argument('--feature_loss_coefficient', default=0.03, type=float)
 parser.add_argument('--dataset_path', default="data", type=str)
@@ -138,7 +138,7 @@ optimizer = optim.SGD(net.parameters(), lr=args.init_lr, weight_decay=5e-4, mome
 def train(epoch):
     correct = [0 for _ in range(5)]
     predicted = [0 for _ in range(5)]
-    if epoch in [90, 160, 210,260]:
+    if epoch in [90, 160, 210,250]:
         for param_group in optimizer.param_groups:
             param_group['lr'] /= 10
     net.train()

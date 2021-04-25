@@ -124,7 +124,8 @@ optimizer = optim.SGD(net.parameters(), lr=args.init_lr, weight_decay=5e-4, mome
 def train(epoch):
     correct = [0 for _ in range(5)]
     predicted = [0 for _ in range(5)]
-    if epoch in [90, 160, 200, 245]:
+    if epoch in [90, 160, 210, 250]:
+
         for param_group in optimizer.param_groups:
             param_group['lr'] /= 10
     net.train()
