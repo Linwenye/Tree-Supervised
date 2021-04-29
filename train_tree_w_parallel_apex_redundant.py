@@ -2,18 +2,14 @@ import torch.optim as optim
 import torchvision
 import torchvision.transforms as transforms
 import argparse
-from wide_resnet import *
+from models.wide_resnet import *
 import torch.nn.functional as F
-from autoaugment import CIFAR10Policy
-from cutout import Cutout
+from utils.autoaugment import CIFAR10Policy
+from utils.cutout import Cutout
 import torch.backends.cudnn as cudnn
-import wandb
-import math
 import torch
 from torch import nn
 import os
-import sys
-import tempfile
 import torch.distributed as dist
 import torch.multiprocessing as mp
 from apex.parallel import DistributedDataParallel as DDP

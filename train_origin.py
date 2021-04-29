@@ -2,9 +2,9 @@ import torch.optim as optim
 import torchvision
 import torchvision.transforms as transforms
 import argparse
-from resnet_liu import *
-from autoaugment import CIFAR10Policy
-from cutout import Cutout
+from models.resnet_liu import *
+from utils.autoaugment import CIFAR10Policy
+from utils.cutout import Cutout
 import torch.backends.cudnn as cudnn
 import wandb
 
