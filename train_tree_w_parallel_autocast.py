@@ -17,6 +17,8 @@ import tempfile
 import torch.distributed as dist
 import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.cuda.amp import GradScaler
+from torch.cuda.amp import autocast
 import time
 
 parser = argparse.ArgumentParser(description='Self-Distillation CIFAR Training')
@@ -94,7 +96,7 @@ transform_test = transforms.Compose([
 
 def train(rank, world_size):
     torch.manual_seed(rank+1)
-
+    scaler = GradScaler()
     if rank == 0:
         print(args)
     print(f"Running basic DDP example on rank {rank}.")
@@ -162,8 +164,8 @@ def train(rank, world_size):
     optimizer.zero_grad()
 
     for epoch in range(args.epoch):
-        ######################### train
         train_start = time.time()
+        ######################### train
         correct = [0 for _ in range(5)]
         predicted = [0 for _ in range(5)]
         if epoch in [60, 120, 180]:
@@ -175,26 +177,29 @@ def train(rank, world_size):
             length = len(trainloader)
             inputs, labels = data
             inputs, labels = inputs.to(rank), labels.to(rank)
-            outputs = net(inputs)
-            ensemble = sum(outputs) / len(outputs)
-            ensemble.detach_()
 
-            #   compute loss
-            loss = torch.FloatTensor([0.]).to(rank)
+            with autocast():
 
-            for output in outputs:
-                loss += criterion(output, labels) * (1 - args.loss_coefficient)
+                outputs = net(inputs)
+                ensemble = sum(outputs) / len(outputs)
+                ensemble.detach_()
 
-                for other in outputs:
-                    if other is not output:
-                        #   logits distillation
-                        loss += kl_distill(output, other) * args.loss_coefficient / (len(outputs) - 1)
+                #   compute loss
+                loss = torch.FloatTensor([0.]).to(rank)
+
+                for output in outputs:
+                    loss += criterion(output, labels) * (1 - args.loss_coefficient)
+
+                    for other in outputs:
+                        if other is not output:
+                            #   logits distillation
+                            loss += kl_distill(output, other) * args.loss_coefficient / (len(outputs) - 1)
 
             sum_loss += loss.item()
             optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
             total += float(labels.size(0))
             outputs.append(ensemble)
 
@@ -230,7 +235,7 @@ def train(rank, world_size):
                         _, predicted[classifier_index] = torch.max(outputs[classifier_index].data, 1)
                         correct[classifier_index] += float(predicted[classifier_index].eq(labels.data).cpu().sum())
                     total += float(labels.size(0))
-                print('train and test:',time.time()-train_start)
+
                 print('Test Set AccuracyAcc: 4/4: %.4f%% 3/4: %.4f%% 2/4: %.4f%%  1/4: %.4f%%'
                       ' Ensemble: %.4f%%' % (100 * correct[0] / total, 100 * correct[1] / total,
                                              100 * correct[2] / total, 100 * correct[3] / total,
@@ -248,6 +253,7 @@ def train(rank, world_size):
                         best_single = correct[i] / total
                         print("Best Single Accuracy Updated: ", best_single * 100)
                         # torch.save(net.state_dict(), "./checkpoints/" + str(args.model) + ".pth")
+                print('train and test time:', time.time() - train_start)
                 print()
     if rank == 0:
         print("Training Finished, TotalEPOCH=%d, Best Accuracy=%.4f, Best Single=%.4f" % (

@@ -16,7 +16,9 @@ import sys
 import tempfile
 import torch.distributed as dist
 import torch.multiprocessing as mp
-from torch.nn.parallel import DistributedDataParallel as DDP
+from apex.parallel import DistributedDataParallel as DDP
+# from torch.nn.parallel import DistributedDataParallel as DDP
+from apex import amp
 import time
 
 parser = argparse.ArgumentParser(description='Self-Distillation CIFAR Training')
@@ -154,10 +156,12 @@ def train(rank, world_size):
     # create model and move it to GPU with id rank
 
     net = net.to(rank)
+    optimizer = optim.SGD(net.parameters(), lr=args.init_lr, weight_decay=5e-4, momentum=0.9)
+
+    net, optimizer = amp.initialize(net,optimizer,opt_level='O2')
     net = DDP(net, device_ids=[rank])
     criterion = nn.CrossEntropyLoss()
     kl_distill = DistillKL(args.temperature)
-    optimizer = optim.SGD(net.parameters(), lr=args.init_lr, weight_decay=5e-4, momentum=0.9)
 
     optimizer.zero_grad()
 
@@ -192,7 +196,8 @@ def train(rank, world_size):
 
             sum_loss += loss.item()
             optimizer.zero_grad()
-            loss.backward()
+            with amp.scale_loss(loss, optimizer) as scaled_loss:
+                scaled_loss.backward()
             optimizer.step()
 
             total += float(labels.size(0))
@@ -209,7 +214,7 @@ def train(rank, world_size):
                                                  100 * correct[2] / total, 100 * correct[3] / total,
                                                  100 * correct[4] / total))
         if rank == 0:
-            print('train epoch time:',time.time()-train_start)
+            print('train one epoch time,', time.time()-train_start)
             print({'train_acc': 100. * correct[4] / total, 'train_acc1': 100. * correct[0] / total,
                    'train_acc4': 100. * correct[3] / total, 'train_loss': sum_loss})
 
@@ -230,7 +235,7 @@ def train(rank, world_size):
                         _, predicted[classifier_index] = torch.max(outputs[classifier_index].data, 1)
                         correct[classifier_index] += float(predicted[classifier_index].eq(labels.data).cpu().sum())
                     total += float(labels.size(0))
-                print('train and test:',time.time()-train_start)
+
                 print('Test Set AccuracyAcc: 4/4: %.4f%% 3/4: %.4f%% 2/4: %.4f%%  1/4: %.4f%%'
                       ' Ensemble: %.4f%%' % (100 * correct[0] / total, 100 * correct[1] / total,
                                              100 * correct[2] / total, 100 * correct[3] / total,
@@ -242,12 +247,13 @@ def train(rank, world_size):
                 if correct[4] / total > best_acc:
                     best_acc = correct[4] / total
                     print("Best Accuracy Updated: ", best_acc * 100)
-                    # torch.save(net.state_dict(), "./checkpoints/" + str(args.model) + ".pth")
+                    torch.save(net.state_dict(), "./checkpoints/" + str(args.model) + ".pth")
                 for i in range(4):
                     if correct[i] / total > best_single:
                         best_single = correct[i] / total
                         print("Best Single Accuracy Updated: ", best_single * 100)
-                        # torch.save(net.state_dict(), "./checkpoints/" + str(args.model) + ".pth")
+                        torch.save(net.state_dict(), "./checkpoints/" + str(args.model) + ".pth")
+                print('train and test time:',time.time()-train_start)
                 print()
     if rank == 0:
         print("Training Finished, TotalEPOCH=%d, Best Accuracy=%.4f, Best Single=%.4f" % (
