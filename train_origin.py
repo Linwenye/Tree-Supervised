@@ -3,7 +3,6 @@ import torchvision
 import torchvision.transforms as transforms
 import argparse
 from resnet_liu import *
-import torch.nn.functional as F
 from autoaugment import CIFAR10Policy
 from cutout import Cutout
 import torch.backends.cudnn as cudnn
@@ -34,20 +33,6 @@ parser.add_argument('--batchsize', default=128 * 2, type=int)
 parser.add_argument('--init_lr', default=0.1, type=float)
 args = parser.parse_args()
 print(args)
-
-
-class DistillKL(nn.Module):
-    """Distilling the Knowledge in a Neural Network"""
-
-    def __init__(self, T):
-        super(DistillKL, self).__init__()
-        self.T = T
-
-    def forward(self, y_s, y_t):
-        p_s = F.log_softmax(y_s / self.T, dim=1)
-        p_t = F.softmax(y_t / self.T, dim=1)
-        loss = F.kl_div(p_s, p_t, size_average=False) * (self.T ** 2) / y_s.shape[0]
-        return loss
 
 
 if args.autoaugment:
@@ -106,10 +91,7 @@ testloader = torch.utils.data.DataLoader(
     num_workers=4
 )
 
-# if args.model == "tree_resnet":
-net = TreeCifarResNet32_v1(num_class)
-# if args.model == "resnet32":
-#     net = CifarResNet32(num_class)
+net = CifarResNet32(num_class)
 
 net.to(device)
 net = torch.nn.DataParallel(net)
@@ -118,11 +100,8 @@ kl_distill = DistillKL(args.temperature)
 optimizer = optim.SGD(net.parameters(), lr=args.init_lr, weight_decay=5e-4, momentum=0.9)
 
 
-# scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=200)
-
 def train(epoch):
-    correct = [0 for _ in range(5)]
-    predicted = [0 for _ in range(5)]
+    correct = 0
     if epoch in epoch_down:
         for param_group in optimizer.param_groups:
             param_group['lr'] /= 10
@@ -133,24 +112,10 @@ def train(epoch):
         inputs, labels = data
         inputs, labels = inputs.to(device), labels.to(device)
         outputs= net(inputs)
-        ensemble = sum(outputs) / len(outputs)
-        ensemble.detach_()
 
         #   compute loss
         loss = torch.FloatTensor([0.]).to(device)
-
-        #   teacher: -temp: swap; -temp: out4; -further: random; -further: mutual
-        # further er : distill by ensemble
-        #   for out4 classifier
-
-        for output in outputs:
-            loss += criterion(output, labels) * (1 - args.loss_coefficient)
-
-            for other in outputs:
-                if other is not output:
-                    #   logits distillation
-                    loss += kl_distill(output, other) * args.loss_coefficient/(len(outputs)-1)
-
+        loss += criterion(outputs, labels)
 
         sum_loss += loss.item()
         optimizer.zero_grad()
@@ -158,55 +123,34 @@ def train(epoch):
         optimizer.step()
 
         total += float(labels.size(0))
-        outputs.append(ensemble)
 
-        for classifier_index in range(len(outputs)):
-            _, predicted[classifier_index] = torch.max(outputs[classifier_index].data, 1)
-            correct[classifier_index] += float(predicted[classifier_index].eq(labels.data).cpu().sum())
+        _, predicted= torch.max(outputs.data, 1)
+        correct+= float(predicted.eq(labels.data).cpu().sum())
         if i % 80 == 79:
-            print('[epoch:%d, iter:%d] Loss: %.03f | Acc: 4/4: %.2f%% 3/4: %.2f%% 2/4: %.2f%%  1/4: %.2f%%'
-                  ' Ensemble: %.2f%%' % (epoch, (i + epoch * length), sum_loss / (i + 1),
-                                         100 * correct[0] / total, 100 * correct[1] / total,
-                                         100 * correct[2] / total, 100 * correct[3] / total,
-                                         100 * correct[4] / total))
-    wandb.log({'train_acc': 100. * correct[4] / total, 'train_acc1': 100. * correct[0] / total,
-               'train_acc4': 100. * correct[3] / total, 'train_loss': sum_loss})
+            print('[epoch:%d, iter:%d] Loss: %.03f | Acc: 4/4: %.2f ' % (epoch, (i + epoch * length), sum_loss / (i + 1),100 * correct / total))
+    wandb.log({'train_acc': 100. * correct / total,'train_loss': sum_loss})
 
 
 def test(epoch):
     with torch.no_grad():
-        correct = [0 for _ in range(5)]
-        predicted = [0 for _ in range(5)]
+        correct = 0
         total = 0.0
         for data in testloader:
             net.eval()
             images, labels = data
             images, labels = images.to(device), labels.to(device)
             outputs= net(images)
-            ensemble = sum(outputs) / len(outputs)
-            outputs.append(ensemble)
-            for classifier_index in range(len(outputs)):
-                _, predicted[classifier_index] = torch.max(outputs[classifier_index].data, 1)
-                correct[classifier_index] += float(predicted[classifier_index].eq(labels.data).cpu().sum())
+            _, predicted = torch.max(outputs.data, 1)
+            correct += float(predicted.eq(labels.data).cpu().sum())
             total += float(labels.size(0))
 
-        print('Test Set AccuracyAcc: 4/4: %.4f%% 3/4: %.4f%% 2/4: %.4f%%  1/4: %.4f%%'
-              ' Ensemble: %.4f%%' % (100 * correct[0] / total, 100 * correct[1] / total,
-                                     100 * correct[2] / total, 100 * correct[3] / total,
-                                     100 * correct[4] / total))
-        wandb.log({'test_acc': 100. * correct[4] / total, 'test_acc1': 100. * correct[0] / total,
-                   'test_acc4': 100. * correct[3] / total})
+        print('Test Set AccuracyAcc: 4/4: %.4f' % (100 * correct / total))
+        wandb.log({'test_acc': 100. * correct / total})
 
         global best_single, best_acc
-        if correct[4] / total > best_acc:
-            best_acc = correct[4] / total
+        if correct/ total > best_acc:
+            best_acc = correct / total
             print("Best Accuracy Updated: ", best_acc * 100)
-            torch.save(net.state_dict(), "./checkpoints/" + str(args.model) + ".pth")
-        for i in range(4):
-            if correct[i] / total > best_single:
-                best_single = correct[i] / total
-                print("Best Single Accuracy Updated: ", best_single * 100)
-                torch.save(net.state_dict(), "./checkpoints/" + str(args.model) + ".pth")
     # scheduler.step()
     # print('lr:', scheduler.get_last_lr())
     print()

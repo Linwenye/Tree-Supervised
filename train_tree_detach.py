@@ -20,7 +20,7 @@ parser = argparse.ArgumentParser(description='Self-Distillation CIFAR Training')
 parser.add_argument('--model', default="tree_resnet32", type=str, help="resnet18|resnet34|resnet50|resnet101|resnet152|"
                                                                   "wideresnet50|wideresnet101|resnext50|resnext101")
 parser.add_argument('--dataset', default="cifar100", type=str, help="cifar100|cifar10")
-# default 270 epoch
+# default 250 epoch
 parser.add_argument('--epoch', default=270, type=int, help="training epochs")
 parser.add_argument('--loss_coefficient', default=0.3, type=float)
 parser.add_argument('--feature_loss_coefficient', default=0.03, type=float)
@@ -149,7 +149,7 @@ def train(epoch):
             for other in outputs:
                 if other is not output:
                     #   logits distillation
-                    loss += kl_distill(output, other) * args.loss_coefficient/(len(outputs)-1)
+                    loss += kl_distill(output, other.detach()) * args.loss_coefficient/(len(outputs)-1)
 
 
         sum_loss += loss.item()

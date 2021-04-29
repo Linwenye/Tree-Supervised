@@ -594,6 +594,14 @@ def TreeCifarResNet32_v1(num_classes):
     return TreeCifarResNet_v1(BasicBlock, [5, 5, 5], num_classes)
 
 
+def TreeCifarResNet20_v1(num_classes):
+    return TreeCifarResNet_v1(BasicBlock, [3, 3, 3], num_classes)
+
+
+def TreeCifarResNet44_v1(num_classes):
+    return TreeCifarResNet_v1(BasicBlock, [7, 7, 7], num_classes)
+
+
 def ResNet18(num_classes):
     return ResNet(BasicBlock, [2, 2, 2, 2], num_classes)
 
@@ -629,6 +637,5 @@ def test():
     y = net(torch.randn(1, 3, 32, 32))
 
     print(y[0][0].size())
-
 
 # test()

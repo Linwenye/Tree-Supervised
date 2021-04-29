@@ -1,5 +1,3 @@
-import torch
-import torch.nn as nn
 import torch.optim as optim
 import torchvision
 import torchvision.transforms as transforms
@@ -9,7 +7,6 @@ import torch.nn.functional as F
 from autoaugment import CIFAR10Policy
 from cutout import Cutout
 import torch.backends.cudnn as cudnn
-import wandb
 
 cudnn.benchmark = True
 GPU_double = 2
