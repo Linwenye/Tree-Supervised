@@ -94,11 +94,6 @@ class Wide_TreeResNet(nn.Module):
         nStages = [16, 16*k, 32*k, 64*k]
 
         self.conv1 = conv3x3(3,nStages[0])
-        # self.layer1 = self._wide_layer(wide_basic, nStages[1], n, dropout_rate, stride=1)
-        # self.layer2 = self._wide_layer(wide_basic, nStages[2], n, dropout_rate, stride=2)
-        # self.layer3 = self._wide_layer(wide_basic, nStages[3], n, dropout_rate, stride=2)
-        # self.bn1 = nn.BatchNorm2d(nStages[3], momentum=0.9)
-        # self.linear = nn.Linear(nStages[3], num_classes)
 
         self.layer1 = nn.ModuleList([self._wide_layer(wide_basic,16, nStages[1], n, dropout_rate, stride=1)])
         self.layer2 = nn.ModuleList([self._wide_layer(wide_basic,nStages[1], nStages[2], n, dropout_rate, stride=2) for _ in range(2)])

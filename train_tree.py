@@ -2,26 +2,25 @@ import torch.optim as optim
 import torchvision
 import torchvision.transforms as transforms
 import argparse
-from models.resnet_liu import *
+from models import *
 import torch.nn.functional as F
 from utils.autoaugment import CIFAR10Policy
 from utils.cutout import Cutout
 import torch.backends.cudnn as cudnn
 import wandb
-
-cudnn.benchmark = True
-
+import torch
+from torch import nn
+import time
+from configs import *
 # set seed for reproducibility
-torch.manual_seed(0)
-
+# torch.manual_seed(0)
+cudnn.benchmark = True
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 parser = argparse.ArgumentParser(description='Self-Distillation CIFAR Training')
-parser.add_argument('--model', default="tree_resnet32", type=str, help="resnet18|resnet34|resnet50|resnet101|resnet152|"
-                                                                  "wideresnet50|wideresnet101|resnext50|resnext101")
+parser.add_argument('--model', default="tree_resnet32", type=str, help="tree_resnet32|tree_wide|tree_mobilev3")
 parser.add_argument('--dataset', default="cifar100", type=str, help="cifar100|cifar10")
-# default 270 epoch
-parser.add_argument('--epoch', default=270, type=int, help="training epochs")
+parser.add_argument('--epoch', default=200, type=int, help="training epochs")
 parser.add_argument('--loss_coefficient', default=0.3, type=float)
 parser.add_argument('--feature_loss_coefficient', default=0.03, type=float)
 parser.add_argument('--dataset_path', default="data", type=str)
@@ -30,7 +29,7 @@ parser.add_argument('--dataset_path', default="data", type=str)
 parser.add_argument('--autoaugment', default=False, type=bool)
 
 parser.add_argument('--temperature', default=3.0, type=float)
-parser.add_argument('--batchsize', default=128 * 2, type=int)
+parser.add_argument('--gpus', default=4, type=int)
 parser.add_argument('--init_lr', default=0.1, type=float)
 args = parser.parse_args()
 print(args)
@@ -65,6 +64,7 @@ transform_test = transforms.Compose([
     transforms.ToTensor(),
     transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
 ])
+
 if args.dataset == "cifar100":
     trainset = torchvision.datasets.CIFAR100(
         root=args.dataset_path,
@@ -93,55 +93,59 @@ elif args.dataset == "cifar10":
         transform=transform_test
     )
     num_class = 10
-trainloader = torch.utils.data.DataLoader(
-    trainset,
-    batch_size=args.batchsize,
-    shuffle=True,
-    num_workers=4
-)
-testloader = torch.utils.data.DataLoader(
-    testset,
-    batch_size=args.batchsize,
-    shuffle=False,
-    num_workers=4
-)
 
-# if args.model == "tree_resnet":
-net = TreeCifarResNet32_v1(num_class)
-# if args.model == "resnet32":
-#     net = CifarResNet32(num_class)
+if args.model == 'tree_wide':
+    net = Wide_TreeResNet(28, 10, 0, num_class)
+    config = config_wide_resnet
+elif args.model == 'tree_mobilev3':
+    net = TreeMobileNetV3_Large(num_class)
+    config = config_mobilev3
+elif args.model=='tree_resnet44':
+    net = TreeCifarResNet44_v1(num_class)
+else:
+    raise NameError
 
 net.to(device)
 net = torch.nn.DataParallel(net)
 criterion = nn.CrossEntropyLoss()
 kl_distill = DistillKL(args.temperature)
-optimizer = optim.SGD(net.parameters(), lr=args.init_lr, weight_decay=5e-4, momentum=0.9)
+optimizer = optim.SGD(net.parameters(), lr=args.init_lr, weight_decay=config.weight_decay, momentum=0.9)
 
+trainloader = torch.utils.data.DataLoader(
+    trainset,
+    batch_size=config.batch_size*args.gpus,
+    shuffle=True,
+    num_workers=4
+)
+testloader = torch.utils.data.DataLoader(
+    testset,
+    batch_size=config.batch_size*args.gpus,
+    shuffle=False,
+    num_workers=4
+)
 
-# scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=200)
+def adjust_lr(epoch):
+    if epoch in config.down_epoch:
+        for param_group in optimizer.param_groups:
+            param_group['lr'] /= 10
+
 
 def train(epoch):
     correct = [0 for _ in range(5)]
     predicted = [0 for _ in range(5)]
-    if epoch in epoch_down:
-        for param_group in optimizer.param_groups:
-            param_group['lr'] /= 10
+
     net.train()
     sum_loss, total = 0.0, 0.0
     for i, data in enumerate(trainloader, 0):
         length = len(trainloader)
         inputs, labels = data
         inputs, labels = inputs.to(device), labels.to(device)
-        outputs= net(inputs)
+        outputs = net(inputs)
         ensemble = sum(outputs) / len(outputs)
         ensemble.detach_()
 
         #   compute loss
         loss = torch.FloatTensor([0.]).to(device)
-
-        #   teacher: -temp: swap; -temp: out4; -further: random; -further: mutual
-        # further er : distill by ensemble
-        #   for out4 classifier
 
         for output in outputs:
             loss += criterion(output, labels) * (1 - args.loss_coefficient)
@@ -149,8 +153,7 @@ def train(epoch):
             for other in outputs:
                 if other is not output:
                     #   logits distillation
-                    loss += kl_distill(output, other) * args.loss_coefficient/(len(outputs)-1)
-
+                    loss += kl_distill(output, other) * args.loss_coefficient / (len(outputs) - 1)
 
         sum_loss += loss.item()
         optimizer.zero_grad()
@@ -182,7 +185,7 @@ def test(epoch):
             net.eval()
             images, labels = data
             images, labels = images.to(device), labels.to(device)
-            outputs= net(images)
+            outputs = net(images)
             ensemble = sum(outputs) / len(outputs)
             outputs.append(ensemble)
             for classifier_index in range(len(outputs)):
@@ -201,14 +204,12 @@ def test(epoch):
         if correct[4] / total > best_acc:
             best_acc = correct[4] / total
             print("Best Accuracy Updated: ", best_acc * 100)
-            torch.save(net.state_dict(), "./checkpoints/" + str(args.model) + ".pth")
+            # torch.save(net.state_dict(), "./checkpoints/" + str(args.model) + ".pth")
         for i in range(4):
             if correct[i] / total > best_single:
                 best_single = correct[i] / total
                 print("Best Single Accuracy Updated: ", best_single * 100)
-                torch.save(net.state_dict(), "./checkpoints/" + str(args.model) + ".pth")
-    # scheduler.step()
-    # print('lr:', scheduler.get_last_lr())
+                # torch.save(net.state_dict(), "./checkpoints/" + str(args.model) + ".pth")
     print()
 
 
@@ -216,13 +217,14 @@ if __name__ == "__main__":
     best_acc = 0
     best_single = 0
     wandb.init(project="distill")
-    if args.autoaugment==False:
-        args.epoch=200
-        epoch_down = [60,120,180]
-    else:
-        epoch_down = [90, 160, 210,250]
-    for epoch in range(args.epoch):
+    for epoch in range(config.epoch):
+        start_t = time.time()
+        adjust_lr(epoch)
         train(epoch)
+        if epoch<5:
+            print('train time:',time.time()-start_t)
         test(epoch)
+        if epoch<5:
+            print('train and test time:',time.time()-start_t)
     print("Training Finished, TotalEPOCH=%d, Best Accuracy=%.4f, Best Single=%.4f" % (
-    args.epoch, 100 * best_acc, 100 * best_single))
+        args.epoch, 100 * best_acc, 100 * best_single))

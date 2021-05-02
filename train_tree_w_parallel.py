@@ -2,7 +2,7 @@ import torch.optim as optim
 import torchvision
 import torchvision.transforms as transforms
 import argparse
-from models.wide_resnet import *
+from models import *
 import torch.nn.functional as F
 from utils.autoaugment import CIFAR10Policy
 from utils.cutout import Cutout
@@ -15,9 +15,9 @@ import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
 import time
 
+
 parser = argparse.ArgumentParser(description='Self-Distillation CIFAR Training')
-parser.add_argument('--model', default="tree_resnet32", type=str, help="resnet18|resnet34|resnet50|resnet101|resnet152|"
-                                                                       "wideresnet50|wideresnet101|resnext50|resnext101")
+parser.add_argument('--model', default="tree_resnet32", type=str, help="resnet18|tree_resnet32|tree_wide|tree_mobilev3|mobilev3|wide")
 parser.add_argument('--dataset', default="cifar100", type=str, help="cifar100|cifar10")
 parser.add_argument('--epoch', default=200, type=int, help="training epochs")
 parser.add_argument('--loss_coefficient', default=0.3, type=float)
@@ -54,9 +54,6 @@ cudnn.benchmark = True
 # set seed for reproducibility
 best_acc = 0
 best_single = 0
-
-
-# wandb.init(project="distill")
 
 
 def setup(rank, world_size):
@@ -146,7 +143,17 @@ def train(rank, world_size):
         pin_memory=True,
     )
     # -------------------------------------
-    net = Wide_TreeResNet(28, 10, 0, num_class)
+    if args.model == 'tree_wide':
+        net = Wide_TreeResNet(28, 10, 0, num_class)
+    elif args.model =='tree_mobilev3':
+        net = TreeMobileNetV3_Large(num_class)
+    elif args.model == 'mobilev3':
+        net = MobileNetV3_Large(num_class)
+    elif args.model == 'wide':
+        net = Wide_ResNet(28, 10, 0, num_class)
+    else:
+        raise NameError
+
     # create model and move it to GPU with id rank
 
     net = net.to(rank)

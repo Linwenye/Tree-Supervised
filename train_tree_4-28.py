@@ -2,14 +2,12 @@ import torch.optim as optim
 import torchvision
 import torchvision.transforms as transforms
 import argparse
-from models.wide_resnet import *
+from models.resnet_liu import *
 import torch.nn.functional as F
 from utils.autoaugment import CIFAR10Policy
 from utils.cutout import Cutout
 import torch.backends.cudnn as cudnn
 import wandb
-import torch
-from torch import nn
 
 cudnn.benchmark = True
 
@@ -20,10 +18,10 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 parser = argparse.ArgumentParser(description='Self-Distillation CIFAR Training')
 parser.add_argument('--model', default="tree_resnet32", type=str, help="resnet18|resnet34|resnet50|resnet101|resnet152|"
-                                                                       "wideresnet50|wideresnet101|resnext50|resnext101")
+                                                                  "wideresnet50|wideresnet101|resnext50|resnext101")
 parser.add_argument('--dataset', default="cifar100", type=str, help="cifar100|cifar10")
 # default 270 epoch
-parser.add_argument('--epoch', default=200, type=int, help="training epochs")
+parser.add_argument('--epoch', default=270, type=int, help="training epochs")
 parser.add_argument('--loss_coefficient', default=0.3, type=float)
 parser.add_argument('--feature_loss_coefficient', default=0.03, type=float)
 parser.add_argument('--dataset_path', default="data", type=str)
@@ -50,18 +48,6 @@ class DistillKL(nn.Module):
         p_t = F.softmax(y_t / self.T, dim=1)
         loss = F.kl_div(p_s, p_t, size_average=False) * (self.T ** 2) / y_s.shape[0]
         return loss
-
-
-# def learning_rate(init, epoch):
-#     optim_factor = 0
-#     if epoch > 160:
-#         optim_factor = 3
-#     elif epoch > 120:
-#         optim_factor = 2
-#     elif epoch > 60:
-#         optim_factor = 1
-#
-#     return init * math.pow(0.2, optim_factor)
 
 
 if args.autoaugment:
@@ -121,7 +107,7 @@ testloader = torch.utils.data.DataLoader(
 )
 
 # if args.model == "tree_resnet":
-net = Wide_TreeResNet(28, 10, 0, num_class)
+net = TreeCifarResNet32_v1(num_class)
 # if args.model == "resnet32":
 #     net = CifarResNet32(num_class)
 
@@ -146,7 +132,7 @@ def train(epoch):
         length = len(trainloader)
         inputs, labels = data
         inputs, labels = inputs.to(device), labels.to(device)
-        outputs = net(inputs)
+        outputs= net(inputs)
         ensemble = sum(outputs) / len(outputs)
         ensemble.detach_()
 
@@ -163,7 +149,8 @@ def train(epoch):
             for other in outputs:
                 if other is not output:
                     #   logits distillation
-                    loss += kl_distill(output, other) * args.loss_coefficient / (len(outputs) - 1)
+                    loss += kl_distill(output, other) * args.loss_coefficient/(len(outputs)-1)
+
 
         sum_loss += loss.item()
         optimizer.zero_grad()
@@ -195,7 +182,7 @@ def test(epoch):
             net.eval()
             images, labels = data
             images, labels = images.to(device), labels.to(device)
-            outputs = net(images)
+            outputs= net(images)
             ensemble = sum(outputs) / len(outputs)
             outputs.append(ensemble)
             for classifier_index in range(len(outputs)):
@@ -229,13 +216,13 @@ if __name__ == "__main__":
     best_acc = 0
     best_single = 0
     wandb.init(project="distill")
-    if args.autoaugment == False:
-        args.epoch = 200
-        epoch_down = [60, 120, 180]
+    if args.autoaugment==False:
+        args.epoch=200
+        epoch_down = [60,120,180]
     else:
-        epoch_down = [90, 160, 210, 250]
+        epoch_down = [90, 160, 210,250]
     for epoch in range(args.epoch):
         train(epoch)
         test(epoch)
     print("Training Finished, TotalEPOCH=%d, Best Accuracy=%.4f, Best Single=%.4f" % (
-        args.epoch, 100 * best_acc, 100 * best_single))
+    args.epoch, 100 * best_acc, 100 * best_single))
