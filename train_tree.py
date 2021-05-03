@@ -100,8 +100,12 @@ if args.model == 'tree_wide':
 elif args.model == 'tree_mobilev3':
     net = TreeMobileNetV3_Large(num_class)
     config = config_mobilev3
+elif args.model == 'tree_mobilev2':
+    net = TreeMobileNetV2(num_class)
+    config = config_mobilev3
 elif args.model=='tree_resnet44':
     net = TreeCifarResNet44_v1(num_class)
+    config = config_resnet
 else:
     raise NameError
 
