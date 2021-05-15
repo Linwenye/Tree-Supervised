@@ -40,7 +40,7 @@ class Block(nn.Module):
 class MobileNetV2(nn.Module):
     # (expansion, out_planes, num_blocks, stride)
     cfg = [(1, 16, 1, 1),
-           (6, 24, 2, 1),  # NOTE: change stride 2 -> 1 for CIFAR10
+           (6, 24, 2, 2),  # NOTE: change stride 2 -> 1 for CIFAR10
            (6, 32, 3, 2),
            (6, 64, 4, 2),
            (6, 96, 3, 1),
@@ -50,7 +50,7 @@ class MobileNetV2(nn.Module):
     def __init__(self, num_classes=10):
         super(MobileNetV2, self).__init__()
         # NOTE: change conv1 stride 2 -> 1 for CIFAR10
-        self.conv1 = nn.Conv2d(3, 32, kernel_size=3, stride=1, padding=1, bias=False)
+        self.conv1 = nn.Conv2d(3, 32, kernel_size=3, stride=2, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(32)
         self.layers = self._make_layers(in_planes=32)
         self.conv2 = nn.Conv2d(320, 1280, kernel_size=1, stride=1, padding=0, bias=False)
@@ -71,7 +71,7 @@ class MobileNetV2(nn.Module):
         out = self.layers(out)
         out = F.relu(self.bn2(self.conv2(out)))
         # NOTE: change pooling kernel_size 7 -> 4 for CIFAR10
-        out = F.avg_pool2d(out, 4)
+        out = F.avg_pool2d(out, 7)
         out = out.view(out.size(0), -1)
         out = self.linear(out)
         return out
@@ -131,29 +131,34 @@ class TreeMobileNetV2(nn.Module):
         return res
 
 
+
 class TreeMobileNetV2_image(nn.Module):
     # (expansion, out_planes, num_blocks, stride)
-    cfg = [(1, 16, 1, 1),
-           (6, 24, 2, 2),  # NOTE: change stride 2 -> 1 for CIFAR10
-           (6, 32, 3, 2),
-           (6, 64, 4, 2),
-           (6, 96, 3, 1),
-           (6, 160, 3, 2),
-           (6, 320, 1, 1)]
+    cfg = [
+        [(1, 16, 1, 1),
+         (6, 24, 2, 2)],  # NOTE: change stride 2 -> 1 for CIFAR10
+        [(6, 32, 3, 2),
+         (6, 64, 4, 2),
+         (6, 96, 3, 1)],
+        [(6, 160, 3, 2),
+         (6, 320, 1, 1)]]
 
-    def __init__(self, num_classes=10):
+    def __init__(self, num_classes=1000):
         super(TreeMobileNetV2_image, self).__init__()
         # NOTE: change conv1 stride 2 -> 1 for CIFAR10
         self.conv1 = nn.Conv2d(3, 32, kernel_size=3, stride=2, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(32)
-        self.layers = self._make_layers(in_planes=32)
-        self.conv2 = nn.Conv2d(320, 1280, kernel_size=1, stride=1, padding=0, bias=False)
-        self.bn2 = nn.BatchNorm2d(1280)
-        self.linear = nn.Linear(1280, num_classes)
+        self.layer1 = nn.ModuleList([self._make_layers(32, self.cfg[0])])
+        self.layer2 = nn.ModuleList([self._make_layers(24, self.cfg[1]) for _ in range(2)])
+        self.layer3 = nn.ModuleList([self._make_layers(96, self.cfg[2]) for _ in range(4)])
+        self.conv2s = nn.ModuleList(
+            [nn.Conv2d(320, 1280, kernel_size=1, stride=1, padding=0, bias=False) for _ in range(4)])
+        self.bn2s = nn.ModuleList([nn.BatchNorm2d(1280) for _ in range(4)])
+        self.linears = nn.ModuleList([nn.Linear(1280, num_classes) for _ in range(4)])
 
-    def _make_layers(self, in_planes):
+    def _make_layers(self, in_planes, cfg):
         layers = []
-        for expansion, out_planes, num_blocks, stride in self.cfg:
+        for expansion, out_planes, num_blocks, stride in cfg:
             strides = [stride] + [1] * (num_blocks - 1)
             for stride in strides:
                 layers.append(Block(in_planes, out_planes, expansion, stride))
@@ -162,19 +167,30 @@ class TreeMobileNetV2_image(nn.Module):
 
     def forward(self, x):
         out = F.relu(self.bn1(self.conv1(x)))
-        out = self.layers(out)
-        out = F.relu(self.bn2(self.conv2(out)))
-        # NOTE: change pooling kernel_size 7 -> 4 for CIFAR10
-        out = F.avg_pool2d(out, 7)
-        out = out.view(out.size(0), -1)
-        out = self.linear(out)
-        return out
 
+        out = self.layer1[0](out)
+        out1 = self.layer2[0](out)
+        out3 = self.layer2[1](out)
+        out2 = self.layer3[1](out1)
+        out1 = self.layer3[0](out1)
+        out4 = self.layer3[3](out3)
+        out3 = self.layer3[2](out3)
+
+        res = [out1, out2, out3, out4]
+        for i in range(4):
+            res[i] = F.relu(self.bn2s[i](self.conv2s[i](res[i])))
+            # NOTE: change pooling kernel_size 7 -> 4 for CIFAR10
+            res[i] = F.avg_pool2d(res[i], 7)
+            res[i] = res[i].view(res[i].size(0), -1)
+            res[i] = self.linears[i](res[i])
+        return res
 
 def test():
-    net = TreeMobileNetV2(num_classes=100)
-    x = torch.randn(2, 3, 32, 32)
+    net = TreeMobileNetV2_image()
+    x = torch.randn(2, 3, 224, 224)
     y = net(x)
+    print(sum(p.numel() for p in net.parameters()))
+    print(net)
     print(y[0].size())
 
-test()
+# test()

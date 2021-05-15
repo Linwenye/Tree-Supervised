@@ -12,8 +12,11 @@ import torch
 from torch import nn
 import time
 from configs import *
+from torch.cuda.amp import GradScaler
+from torch.cuda.amp import autocast
+
 # set seed for reproducibility
-# torch.manual_seed(0)
+torch.manual_seed(0)
 cudnn.benchmark = True
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -55,10 +58,12 @@ if args.autoaugment:
                                           Cutout(n_holes=1, length=16),
                                           transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))])
 else:
-    transform_train = transforms.Compose([transforms.RandomCrop(32, padding=4, fill=128),
-                                          transforms.RandomHorizontalFlip(), transforms.ToTensor(),
-                                          transforms.Normalize((0.4914, 0.4822, 0.4465),
-                                                               (0.2023, 0.1994, 0.2010))])
+    transform_train = transforms.Compose([
+        transforms.RandomCrop(32, padding=4),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+    ])
 
 transform_test = transforms.Compose([
     transforms.ToTensor(),
@@ -99,13 +104,16 @@ if args.model == 'tree_wide':
     config = config_wide_resnet
 elif args.model == 'tree_mobilev3':
     net = TreeMobileNetV3_Large(num_class)
-    config = config_mobilev3
+    config = config_tree_mobilev3
 elif args.model == 'tree_mobilev2':
     net = TreeMobileNetV2(num_class)
-    config = config_mobilev3
-elif args.model=='tree_resnet44':
+    config = config_tree_mobilev3
+elif args.model == 'tree_resnet44':
     net = TreeCifarResNet44_v1(num_class)
-    config = config_resnet
+    config = config_tree_resnet
+elif args.model == 'tree_resnet110':
+    net = TreeCifarResNet110_v1(num_class)
+    config = config_tree_resnet
 else:
     raise NameError
 
@@ -117,16 +125,17 @@ optimizer = optim.SGD(net.parameters(), lr=args.init_lr, weight_decay=config.wei
 
 trainloader = torch.utils.data.DataLoader(
     trainset,
-    batch_size=config.batch_size*args.gpus,
+    batch_size=config.batch_size * args.gpus,
     shuffle=True,
-    num_workers=4
+    num_workers=8
 )
 testloader = torch.utils.data.DataLoader(
     testset,
-    batch_size=config.batch_size*args.gpus,
+    batch_size=config.batch_size * args.gpus,
     shuffle=False,
-    num_workers=4
+    num_workers=8
 )
+
 
 def adjust_lr(epoch):
     if epoch in config.down_epoch:
@@ -176,8 +185,8 @@ def train(epoch):
                                          100 * correct[0] / total, 100 * correct[1] / total,
                                          100 * correct[2] / total, 100 * correct[3] / total,
                                          100 * correct[4] / total))
-    wandb.log({'train_acc': 100. * correct[4] / total, 'train_acc1': 100. * correct[0] / total,
-               'train_acc4': 100. * correct[3] / total, 'train_loss': sum_loss})
+    # wandb.log({'train_acc': 100. * correct[4] / total, 'train_acc1': 100. * correct[0] / total,
+    #            'train_acc4': 100. * correct[3] / total, 'train_loss': sum_loss})
 
 
 def test(epoch):
@@ -201,8 +210,8 @@ def test(epoch):
               ' Ensemble: %.4f%%' % (100 * correct[0] / total, 100 * correct[1] / total,
                                      100 * correct[2] / total, 100 * correct[3] / total,
                                      100 * correct[4] / total))
-        wandb.log({'test_acc': 100. * correct[4] / total, 'test_acc1': 100. * correct[0] / total,
-                   'test_acc4': 100. * correct[3] / total})
+        # wandb.log({'test_acc': 100. * correct[4] / total, 'test_acc1': 100. * correct[0] / total,
+        #            'test_acc4': 100. * correct[3] / total})
 
         global best_single, best_acc
         if correct[4] / total > best_acc:
@@ -220,15 +229,15 @@ def test(epoch):
 if __name__ == "__main__":
     best_acc = 0
     best_single = 0
-    wandb.init(project="distill")
+    # wandb.init(project="distill")
     for epoch in range(config.epoch):
         start_t = time.time()
         adjust_lr(epoch)
         train(epoch)
-        if epoch<5:
-            print('train time:',time.time()-start_t)
+        if epoch < 5:
+            print('train time:', time.time() - start_t)
         test(epoch)
-        if epoch<5:
-            print('train and test time:',time.time()-start_t)
+        if epoch < 5:
+            print('train and test time:', time.time() - start_t)
     print("Training Finished, TotalEPOCH=%d, Best Accuracy=%.4f, Best Single=%.4f" % (
         args.epoch, 100 * best_acc, 100 * best_single))

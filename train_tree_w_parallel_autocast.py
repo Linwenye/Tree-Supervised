@@ -2,7 +2,7 @@ import torch.optim as optim
 import torchvision
 import torchvision.transforms as transforms
 import argparse
-from models.wide_resnet import *
+from models import *
 import torch.nn.functional as F
 from utils.autoaugment import CIFAR10Policy
 from utils.cutout import Cutout
@@ -16,10 +16,9 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.cuda.amp import GradScaler
 from torch.cuda.amp import autocast
 import time
-
+from configs import *
 parser = argparse.ArgumentParser(description='Self-Distillation CIFAR Training')
-parser.add_argument('--model', default="tree_resnet32", type=str, help="resnet18|resnet34|resnet50|resnet101|resnet152|"
-                                                                       "wideresnet50|wideresnet101|resnext50|resnext101")
+parser.add_argument('--model', default="tree_resnet32", type=str, help="resnet18|tree_resnet32|tree_wide|tree_mobilev3|mobilev3|wide")
 parser.add_argument('--dataset', default="cifar100", type=str, help="cifar100|cifar10")
 parser.add_argument('--epoch', default=200, type=int, help="training epochs")
 parser.add_argument('--loss_coefficient', default=0.3, type=float)
@@ -30,7 +29,7 @@ parser.add_argument('--dataset_path', default="data", type=str)
 parser.add_argument('--autoaugment', default=False, type=bool)
 
 parser.add_argument('--temperature', default=3.0, type=float)
-parser.add_argument('--batchsize', default=128 * 2, type=int)
+parser.add_argument('--batchsize', default=128 * 4, type=int)
 parser.add_argument('--init_lr', default=0.1, type=float)
 args = parser.parse_args()
 
@@ -52,13 +51,10 @@ class DistillKL(nn.Module):
         return loss
 
 
-cudnn.benchmark = True
+
 # set seed for reproducibility
 best_acc = 0
 best_single = 0
-
-
-# wandb.init(project="distill")
 
 
 def setup(rank, world_size):
@@ -92,6 +88,8 @@ transform_test = transforms.Compose([
 
 def train(rank, world_size):
     torch.manual_seed(rank+1)
+    cudnn.benchmark = False
+    cudnn.deterministic = True
     scaler = GradScaler()
     if rank == 0:
         print(args)
@@ -135,7 +133,7 @@ def train(rank, world_size):
         trainset,
         batch_size=args.batchsize,
         shuffle=False,
-        num_workers=4,
+        num_workers=12,
         pin_memory=True,
         sampler=train_sampler
     )
@@ -144,18 +142,29 @@ def train(rank, world_size):
         testset,
         batch_size=args.batchsize,
         shuffle=False,
-        num_workers=4,
+        num_workers=12,
         pin_memory=True,
     )
     # -------------------------------------
-    net = Wide_TreeResNet(28, 10, 0, num_class)
+    if args.model == 'tree_wide':
+        net = Wide_TreeResNet(28, 10, 0, num_class)
+        config = config_wide_resnet
+    elif args.model =='tree_mobilev3':
+        net = TreeMobileNetV3_Large(num_class)
+        config = config_tree_mobilev3
+    elif args.model == 'tree_resnet20':
+        net = TreeCifarResNet20_v1(num_class)
+        config = config_tree_resnet
+    else:
+        raise NameError
+
     # create model and move it to GPU with id rank
 
     net = net.to(rank)
     net = DDP(net, device_ids=[rank])
     criterion = nn.CrossEntropyLoss()
     kl_distill = DistillKL(args.temperature)
-    optimizer = optim.SGD(net.parameters(), lr=args.init_lr, weight_decay=5e-4, momentum=0.9)
+    optimizer = optim.SGD(net.parameters(), lr=args.init_lr, weight_decay=config.weight_decay, momentum=0.9)
 
     optimizer.zero_grad()
 
@@ -164,7 +173,7 @@ def train(rank, world_size):
         ######################### train
         correct = [0 for _ in range(5)]
         predicted = [0 for _ in range(5)]
-        if epoch in [60, 120, 180]:
+        if epoch in config.down_epoch:
             for param_group in optimizer.param_groups:
                 param_group['lr'] /= 10
         net.train()

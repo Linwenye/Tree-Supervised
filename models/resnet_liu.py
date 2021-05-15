@@ -474,15 +474,15 @@ class TreeCifarResNet_v1(nn.Module):
             self.conv1 = nn.Conv2d(image_channels, 16, kernel_size=3, stride=1, padding=1, bias=True)
             self.bn1 = nn.Sequential()
         self.layer1 = nn.ModuleList([self._make_blocks(block, 16, 16, num_blocks[0], stride=1)])
-        self.layer2 = nn.ModuleList([self._make_blocks(block, 16, 32, num_blocks[1], stride=2) for _ in range(2)])
-        self.layer3 = nn.ModuleList([self._make_blocks(block, 32, 64, num_blocks[2], stride=2) for _ in range(4)])
+        self.layer2 = nn.ModuleList([self._make_blocks(block, 16*block.expansion, 32, num_blocks[1], stride=2) for _ in range(2)])
+        self.layer3 = nn.ModuleList([self._make_blocks(block, 32*block.expansion, 64, num_blocks[2], stride=2) for _ in range(4)])
         self.linears = nn.ModuleList([nn.Linear(64 * block.expansion, num_classes) for _ in range(4)])
 
     def _make_blocks(self, block, in_planes, out_planes, num_blocks, stride):
         layers = []
         layers.append(block(in_planes, out_planes, stride))
         for i in range(num_blocks - 1):
-            layers.append(block(out_planes, out_planes, 1))
+            layers.append(block(out_planes*block.expansion, out_planes, 1))
         return nn.Sequential(*layers)
 
     def forward(self, x):
@@ -587,7 +587,11 @@ def CifarResNet44(num_classes):
 
 
 def CifarResNet56(num_classes):
-    return CifarResNet(Bottleneck, [9, 9, 9], num_classes)
+    return CifarResNet(BasicBlock, [9, 9, 9], num_classes)
+
+
+def CifarResNet110(num_classes):
+    return CifarResNet(BasicBlock, [18, 18, 18], num_classes)
 
 
 def TreeCifarResNet32_v1(num_classes):
@@ -600,6 +604,14 @@ def TreeCifarResNet20_v1(num_classes):
 
 def TreeCifarResNet44_v1(num_classes):
     return TreeCifarResNet_v1(BasicBlock, [7, 7, 7], num_classes)
+
+
+def TreeCifarResNet56_v1(num_classes):
+    return TreeCifarResNet_v1(Bottleneck, [9, 9, 9], num_classes)
+
+
+def TreeCifarResNet110_v1(num_classes):
+    return TreeCifarResNet_v1(Bottleneck, [18, 18, 18], num_classes)
 
 
 def ResNet18(num_classes):
@@ -632,10 +644,11 @@ def ResNet152():
 
 def test():
     # net = BiResNet18(100)
-    net = TreeCifarResNet32_v1(100)
-    print(net)
+    # net = TreeCifarResNet32_v1(100)
+    net = TreeCifarResNet110_v1(10)
+    # print(net)
     y = net(torch.randn(1, 3, 32, 32))
+    print(sum(p.numel() for p in net.parameters()))
+    print(y[0].size())
 
-    print(y[0][0].size())
-
-# test()
+test()

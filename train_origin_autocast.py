@@ -7,6 +7,8 @@ import torch.backends.cudnn as cudnn
 import time
 import torchvision
 import torchvision.transforms as transforms
+from torch.cuda.amp import GradScaler
+from torch.cuda.amp import autocast
 
 import os
 import argparse
@@ -26,6 +28,7 @@ args = parser.parse_args()
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 best_acc = 0  # best test accuracy
 start_epoch = 0  # start from epoch 0 or last checkpoint epoch
+scaler = GradScaler()
 
 # Data
 print('==> Preparing data..')
@@ -83,9 +86,9 @@ optimizer = optim.SGD(net.parameters(), lr=args.lr,
                       momentum=0.9, weight_decay=config.weight_decay)
 
 trainloader = torch.utils.data.DataLoader(
-    trainset, batch_size=config.batch_size*args.gpus, shuffle=True, num_workers=8)
+    trainset, batch_size=config.batch_size*args.gpus, shuffle=True, num_workers=5)
 testloader = torch.utils.data.DataLoader(
-    testset, batch_size=config.batch_size*args.gpus, shuffle=False, num_workers=8)
+    testset, batch_size=config.batch_size*args.gpus, shuffle=False, num_workers=5)
 
 def adjust_lr(epoch):
     if epoch in config.down_epoch:
@@ -103,10 +106,12 @@ def train(epoch):
     for batch_idx, (inputs, targets) in enumerate(trainloader):
         inputs, targets = inputs.to(device), targets.to(device)
         optimizer.zero_grad()
-        outputs = net(inputs)
-        loss = criterion(outputs, targets)
-        loss.backward()
-        optimizer.step()
+        with autocast():
+            outputs = net(inputs)
+            loss = criterion(outputs, targets)
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
 
         train_loss += loss.item()
         _, predicted = outputs.max(1)

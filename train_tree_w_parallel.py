@@ -14,8 +14,7 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
 import time
-
-
+from configs import *
 parser = argparse.ArgumentParser(description='Self-Distillation CIFAR Training')
 parser.add_argument('--model', default="tree_resnet32", type=str, help="resnet18|tree_resnet32|tree_wide|tree_mobilev3|mobilev3|wide")
 parser.add_argument('--dataset', default="cifar100", type=str, help="cifar100|cifar10")
@@ -28,7 +27,7 @@ parser.add_argument('--dataset_path', default="data", type=str)
 parser.add_argument('--autoaugment', default=False, type=bool)
 
 parser.add_argument('--temperature', default=3.0, type=float)
-parser.add_argument('--batchsize', default=128 * 2, type=int)
+parser.add_argument('--batchsize', default=128 * 4, type=int)
 parser.add_argument('--init_lr', default=0.1, type=float)
 args = parser.parse_args()
 
@@ -50,7 +49,7 @@ class DistillKL(nn.Module):
         return loss
 
 
-cudnn.benchmark = True
+
 # set seed for reproducibility
 best_acc = 0
 best_single = 0
@@ -87,7 +86,8 @@ transform_test = transforms.Compose([
 
 def train(rank, world_size):
     torch.manual_seed(rank+1)
-
+    cudnn.benchmark = False
+    cudnn.deterministic = True
     if rank == 0:
         print(args)
     print(f"Running basic DDP example on rank {rank}.")
@@ -130,7 +130,7 @@ def train(rank, world_size):
         trainset,
         batch_size=args.batchsize,
         shuffle=False,
-        num_workers=4,
+        num_workers=12,
         pin_memory=True,
         sampler=train_sampler
     )
@@ -139,18 +139,19 @@ def train(rank, world_size):
         testset,
         batch_size=args.batchsize,
         shuffle=False,
-        num_workers=4,
+        num_workers=12,
         pin_memory=True,
     )
     # -------------------------------------
     if args.model == 'tree_wide':
         net = Wide_TreeResNet(28, 10, 0, num_class)
+        config = config_wide_resnet
     elif args.model =='tree_mobilev3':
         net = TreeMobileNetV3_Large(num_class)
-    elif args.model == 'mobilev3':
-        net = MobileNetV3_Large(num_class)
-    elif args.model == 'wide':
-        net = Wide_ResNet(28, 10, 0, num_class)
+        config = config_tree_mobilev3
+    elif args.model == 'tree_resnet20':
+        net = TreeCifarResNet20_v1(num_class)
+        config = config_tree_resnet
     else:
         raise NameError
 
@@ -160,16 +161,16 @@ def train(rank, world_size):
     net = DDP(net, device_ids=[rank])
     criterion = nn.CrossEntropyLoss()
     kl_distill = DistillKL(args.temperature)
-    optimizer = optim.SGD(net.parameters(), lr=args.init_lr, weight_decay=5e-4, momentum=0.9)
+    optimizer = optim.SGD(net.parameters(), lr=args.init_lr, weight_decay=config.weight_decay, momentum=0.9)
 
     optimizer.zero_grad()
 
     for epoch in range(args.epoch):
-        ######################### train
         train_start = time.time()
+        ######################### train
         correct = [0 for _ in range(5)]
         predicted = [0 for _ in range(5)]
-        if epoch in [60, 120, 180]:
+        if epoch in config.down_epoch:
             for param_group in optimizer.param_groups:
                 param_group['lr'] /= 10
         net.train()
@@ -233,7 +234,7 @@ def train(rank, world_size):
                         _, predicted[classifier_index] = torch.max(outputs[classifier_index].data, 1)
                         correct[classifier_index] += float(predicted[classifier_index].eq(labels.data).cpu().sum())
                     total += float(labels.size(0))
-                print('train and test:',time.time()-train_start)
+
                 print('Test Set AccuracyAcc: 4/4: %.4f%% 3/4: %.4f%% 2/4: %.4f%%  1/4: %.4f%%'
                       ' Ensemble: %.4f%%' % (100 * correct[0] / total, 100 * correct[1] / total,
                                              100 * correct[2] / total, 100 * correct[3] / total,
@@ -251,6 +252,7 @@ def train(rank, world_size):
                         best_single = correct[i] / total
                         print("Best Single Accuracy Updated: ", best_single * 100)
                         # torch.save(net.state_dict(), "./checkpoints/" + str(args.model) + ".pth")
+                print('train and test time:', time.time() - train_start)
                 print()
     if rank == 0:
         print("Training Finished, TotalEPOCH=%d, Best Accuracy=%.4f, Best Single=%.4f" % (
