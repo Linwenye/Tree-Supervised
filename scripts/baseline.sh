@@ -1,0 +1,1 @@
+CUDA_VISIBLE_DEVICES=4 python train_origin.py --model=vgg16 --gpus=1
