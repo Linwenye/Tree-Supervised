@@ -69,6 +69,9 @@ elif args.model == 'resnet110':
 elif args.model == 'resnet20':
     net = CifarResNet20(num_class)
     config = config_resnet
+elif args.model == 'vgg16':
+    net = VGG('VGG16', num_class)
+    config = config_vgg
 else:
     raise NameError
 net = net.to(device)
@@ -87,10 +90,18 @@ trainloader = torch.utils.data.DataLoader(
 testloader = torch.utils.data.DataLoader(
     testset, batch_size=config.batch_size*args.gpus, shuffle=False, num_workers=8)
 
+scheduler = None
+if args.model == 'vgg16':
+    print('Setting scheduler as consine tactic')
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config.epoch)
+
 def adjust_lr(epoch):
-    if epoch in config.down_epoch:
-        for param_group in optimizer.param_groups:
-            param_group['lr'] /= 10
+    if scheduler is not None:
+        scheduler.step()
+    else:
+        if epoch in config.down_epoch:
+            for param_group in optimizer.param_groups:
+                param_group['lr'] /= 10
 
 # Training
 def train(epoch):
@@ -142,8 +153,8 @@ def test(epoch):
 
 for epoch in range(start_epoch, start_epoch+config.epoch):
     start_t = time.time()
-    adjust_lr(epoch)
     train(epoch)
+    adjust_lr(epoch+2)
     if epoch<5:
         print('train time:',time.time()-start_t)
     test(epoch)

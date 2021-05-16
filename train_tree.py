@@ -114,14 +114,23 @@ elif args.model == 'tree_resnet44':
 elif args.model == 'tree_resnet110':
     net = TreeCifarResNet110_v1(num_class)
     config = config_tree_resnet
+elif args.model == 'tree_vgg16':
+    net = TreeVGG(num_class)
+    config = config_tree_vgg
 else:
     raise NameError
 
 net.to(device)
-net = torch.nn.DataParallel(net)
+if torch.cuda.device_count() > 1:
+    net = torch.nn.DataParallel(net)
 criterion = nn.CrossEntropyLoss()
 kl_distill = DistillKL(args.temperature)
 optimizer = optim.SGD(net.parameters(), lr=args.init_lr, weight_decay=config.weight_decay, momentum=0.9)
+
+scheduler = None
+# if args.model == 'tree_vgg16':
+#     print('Set scheduler with consine tactic')
+#     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config.epoch)
 
 trainloader = torch.utils.data.DataLoader(
     trainset,
@@ -138,9 +147,12 @@ testloader = torch.utils.data.DataLoader(
 
 
 def adjust_lr(epoch):
-    if epoch in config.down_epoch:
-        for param_group in optimizer.param_groups:
-            param_group['lr'] /= 10
+    if scheduler is not None:
+        scheduler.step()
+    else:
+        if epoch in config.down_epoch:
+            for param_group in optimizer.param_groups:
+                param_group['lr'] /= 10
 
 
 def train(epoch):
@@ -232,8 +244,8 @@ if __name__ == "__main__":
     # wandb.init(project="distill")
     for epoch in range(config.epoch):
         start_t = time.time()
-        adjust_lr(epoch)
         train(epoch)
+        adjust_lr(epoch+2)
         if epoch < 5:
             print('train time:', time.time() - start_t)
         test(epoch)
