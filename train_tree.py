@@ -32,8 +32,11 @@ parser.add_argument('--dataset_path', default="data", type=str)
 parser.add_argument('--autoaugment', default=False, type=bool)
 
 parser.add_argument('--temperature', default=3.0, type=float)
-parser.add_argument('--gpus', default=4, type=int)
+parser.add_argument('--gpus', default=1, type=int)
 parser.add_argument('--init_lr', default=0.1, type=float)
+
+# schedule
+parser.add_argument('--schedule', default='step', type=str, help='step|cos')
 args = parser.parse_args()
 print(args)
 
@@ -108,8 +111,8 @@ elif args.model == 'tree_mobilev3':
 elif args.model == 'tree_mobilev2':
     net = TreeMobileNetV2(num_class)
     config = config_tree_mobilev3
-elif args.model == 'tree_resnet44':
-    net = TreeCifarResNet44_v1(num_class)
+elif args.model == 'tree_resnet32':
+    net = TreeCifarResNet32_v1(num_class)
     config = config_tree_resnet
 elif args.model == 'tree_resnet110':
     net = TreeCifarResNet110_v1(num_class)
@@ -146,7 +149,7 @@ def adjust_lr(epoch):
 def train(epoch):
     correct = [0 for _ in range(5)]
     predicted = [0 for _ in range(5)]
-
+    global init
     net.train()
     sum_loss, total = 0.0, 0.0
     for i, data in enumerate(trainloader, 0):
@@ -156,7 +159,18 @@ def train(epoch):
         outputs = net(inputs)
         ensemble = sum(outputs) / len(outputs)
         ensemble.detach_()
-
+        # if epoch == 0 and i == 0:
+        #     #   init the adaptation layers.
+        #     layer_list = []
+        #     teacher_feature_size = outputs_feature[0].size(1)
+        #     for index in range(1, len(outputs_feature)):
+        #         student_feature_size = outputs_feature[index].size(1)
+        #         layer_list.append(nn.Linear(student_feature_size, teacher_feature_size))
+        #     net.adaptation_layers = nn.ModuleList(layer_list)
+        #     net.adaptation_layers.cuda()
+        #     optimizer = optim.SGD(net.parameters(), lr=args.init_lr, weight_decay=5e-4, momentum=0.9)
+        #     #   define the optimizer here again so it will optimize the net.adaptation_layers
+        #     init = True
         #   compute loss
         loss = torch.FloatTensor([0.]).to(device)
 
@@ -222,7 +236,7 @@ def test(epoch):
             if correct[i] / total > best_single:
                 best_single = correct[i] / total
                 print("Best Single Accuracy Updated: ", best_single * 100)
-                # torch.save(net.state_dict(), "./checkpoints/" + str(args.model) + ".pth")
+                torch.save(net.state_dict(), "./checkpoints/" + str(args.model) + ".pth")
     print()
 
 

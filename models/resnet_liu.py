@@ -504,6 +504,47 @@ class TreeCifarResNet_v1(nn.Module):
         return res
 
 
+class TreeCifarResNet_l4(nn.Module):
+    def __init__(self, block, num_blocks, num_classes=10, image_channels=3, batchnorm=True):
+        """ Cifar ResNet with 4 layer"""
+        super(TreeCifarResNet_l4, self).__init__()
+        if batchnorm:
+            self.conv1 = nn.Conv2d(image_channels, 16, kernel_size=3, stride=1, padding=1, bias=False)
+            self.bn1 = nn.BatchNorm2d(16)
+        else:
+            self.conv1 = nn.Conv2d(image_channels, 16, kernel_size=3, stride=1, padding=1, bias=True)
+            self.bn1 = nn.Sequential()
+        self.layer1 = nn.ModuleList([self._make_blocks(block, 16, 16, num_blocks[0], stride=1)])
+        self.layer2 = nn.ModuleList([self._make_blocks(block, 16*block.expansion, 32, num_blocks[1], stride=2) for _ in range(2)])
+        self.layer3 = nn.ModuleList([self._make_blocks(block, 32*block.expansion, 64, num_blocks[2], stride=2) for _ in range(4)])
+        self.linears = nn.ModuleList([nn.Linear(64 * block.expansion, num_classes) for _ in range(4)])
+
+    def _make_blocks(self, block, in_planes, out_planes, num_blocks, stride):
+        layers = []
+        layers.append(block(in_planes, out_planes, stride))
+        for i in range(num_blocks - 1):
+            layers.append(block(out_planes*block.expansion, out_planes, 1))
+        return nn.Sequential(*layers)
+
+    def forward(self, x):
+        out = F.relu(self.bn1(self.conv1(x)))
+        out = self.layer1[0](out)
+        out1 = self.layer2[0](out)
+        out3 = self.layer2[1](out)
+
+        out2 = self.layer3[1](out1)
+        out1 = self.layer3[0](out1)
+        out4 = self.layer3[3](out3)
+        out3 = self.layer3[2](out3)
+        # out = self.layer3(out)
+        res = [out1, out2, out3, out4]
+        for i in range(len(res)):
+            res[i] = F.avg_pool2d(res[i], 8)
+            res[i] = res[i].view(res[i].size(0), -1)
+            res[i] = self.linears[i](res[i])
+        return res
+
+
 # class TreeCifarResNet_v2(nn.Module):
 #     def __init__(self, block, num_blocks, num_classes=10, image_channels=3, batchnorm=True):
 #         """conv1 as root version"""
