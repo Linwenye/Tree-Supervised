@@ -7,6 +7,7 @@ Reference:
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.nn import init
 
 
 class BasicBlock(nn.Module):
@@ -503,6 +504,48 @@ class TreeCifarResNet_v1(nn.Module):
             res[i] = self.linears[i](res[i])
         return res
 
+class TreeCifarResNetCombine(nn.Module):
+    def __init__(self, block, num_blocks, num_classes=10, image_channels=3, batchnorm=True):
+        """layer 1 as root version"""
+        super(TreeCifarResNetCombine, self).__init__()
+        if batchnorm:
+            self.conv1 = nn.Conv2d(image_channels, 16, kernel_size=3, stride=1, padding=1, bias=False)
+            self.bn1 = nn.BatchNorm2d(16)
+        else:
+            self.conv1 = nn.Conv2d(image_channels, 16, kernel_size=3, stride=1, padding=1, bias=True)
+            self.bn1 = nn.Sequential()
+        self.layer1 = nn.ModuleList([self._make_blocks(block, 16, 16, num_blocks[0], stride=1)])
+        self.layer2 = nn.ModuleList([self._make_blocks(block, 16*block.expansion, 32, num_blocks[1], stride=2) for _ in range(2)])
+        self.layer3 = nn.ModuleList([self._make_blocks(block, 32*block.expansion, 64, num_blocks[2], stride=2) for _ in range(4)])
+        self.linears = nn.ModuleList([nn.Linear(64 * block.expansion, num_classes) for _ in range(4)])
+        self.block = block
+        self.num_blocks = num_blocks
+        self.num_classes = num_classes
+    def _make_blocks(self, block, in_planes, out_planes, num_blocks, stride):
+        layers = []
+        layers.append(block(in_planes, out_planes, stride))
+        for i in range(num_blocks - 1):
+            layers.append(block(out_planes*block.expansion, out_planes, 1))
+        return nn.Sequential(*layers)
+
+    def init_modules(self):
+        self.layer3 = self._make_blocks(self.block, 32*self.block.expansion, 64, self.num_blocks[2], stride=2)
+        self.linears = nn.Linear(64 * self.block.expansion, self.num_classes)
+
+    def forward(self, x, branch=0, freeze=True):
+        context = torch.no_grad if freeze else torch.enable_grad
+        with context():
+            out = F.relu(self.bn1(self.conv1(x)))
+            out = self.layer1[0](out)
+            out1 = self.layer2[branch](out)
+        # out1.requires_grad = False
+        # input(out1.requires_grad)
+        out = self.layer3(out1)
+
+        out = F.avg_pool2d(out, 8)
+        out = out.view(out.size(0), -1)
+        out = self.linears(out)
+        return out
 
 class TreeCifarResNet_l4(nn.Module):
     def __init__(self, block, num_blocks, num_classes=10, image_channels=3, batchnorm=True):
@@ -638,6 +681,8 @@ def CifarResNet110(num_classes):
 def TreeCifarResNet32_v1(num_classes):
     return TreeCifarResNet_v1(BasicBlock, [5, 5, 5], num_classes)
 
+def TreeCifarResNet32Combine(num_classes):
+    return TreeCifarResNetCombine(BasicBlock, [5, 5, 5], num_classes)
 
 def TreeCifarResNet20_v1(num_classes):
     return TreeCifarResNet_v1(BasicBlock, [3, 3, 3], num_classes)

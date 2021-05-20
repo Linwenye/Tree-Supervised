@@ -7,7 +7,6 @@ import torch.backends.cudnn as cudnn
 import time
 import torchvision
 import torchvision.transforms as transforms
-
 import os
 import argparse
 
@@ -17,15 +16,21 @@ from configs import *
 parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
 parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
 parser.add_argument('--dataset', default="cifar100", type=str, help="cifar100|cifar10")
-parser.add_argument('--model', default="resnet32", type=str, help="resnet20|resnet32|mobilev3|wide")
+parser.add_argument('--ckpt', default="data/tree_resnet32-1.pth", type=str, help="cifar100|cifar10")
+parser.add_argument('--model', default="tree_resnet32_combine", type=str, help="resnet20|resnet32|mobilev3|wide")
 # parser.add_argument('--weight_decay', default=1e-4, type=float, help='5e-4| 1e-4')
-parser.add_argument('--gpus', default=4, type=int)
-
+parser.add_argument('--gpus', default=1, type=int)
+parser.add_argument('--tactic', default=-1, type=int)
+parser.add_argument('--epoch', default=200, type=int, help="training epochs")
+parser.add_argument('--down_epoch', type=int, nargs='+', default=[100, 150, 180],
+                        help='Decrease learning rate at these epochs.')
+parser.add_argument('--freeze_before', default=200, type=int)
 args = parser.parse_args()
-
+print(args)
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 best_acc = 0  # best test accuracy
 start_epoch = 0  # start from epoch 0 or last checkpoint epoch
+using_wanbd = False
 
 # Data
 print('==> Preparing data..')
@@ -51,41 +56,55 @@ elif args.dataset == "cifar10":
 
 # Model
 print('==> Building model..')
-if args.model == 'mobilev3':
-    net = MobileNetV3_Large(num_class)
-    config = config_mobilev3
-elif args.model == 'mobilev2':
-    net = MobileNetV2(num_class)
-    config = config_mobilev3
-elif args.model == 'wide':
-    net = Wide_ResNet(28,10,0,num_class)
-    config = config_wide_resnet
-elif args.model == 'resnet44':
-    net = CifarResNet44(num_class)
-    config = config_tree_resnet
-elif args.model == 'resnet110':
-    net = CifarResNet110(num_class)
-    config = config_tree_resnet
-elif args.model == 'resnet32':
-    net = CifarResNet32(num_class)
-    config = config_tree_resnet
-elif args.model == 'resnet20':
-    net = CifarResNet20(num_class)
-    config = config_tree_resnet
-elif args.model == 'vgg16':
-    net = VGG('VGG16', num_class)
-    config = config_vgg
-else:
-    raise NameError
-net = net.to(device)
+# if args.model == 'mobilev3':
+#     net = MobileNetV3_Large(num_class)
+#     config = config_mobilev3
+# elif args.model == 'mobilev2':
+#     net = MobileNetV2(num_class)
+#     config = config_mobilev3
+# elif args.model == 'wide':
+#     net = Wide_ResNet(28,10,0,num_class)
+#     config = config_wide_resnet
+# elif args.model == 'resnet44':
+#     net = CifarResNet44(num_class)
+#     config = config_resnet
+# elif args.model == 'resnet110':
+#     net = CifarResNet110(num_class)
+#     config = config_resnet
+# elif args.model == 'resnet20':
+#     net = CifarResNet20(num_class)
+#     config = config_resnet
+# elif args.model == 'tree_resnet32_combine':
+#     net = TreeCifarResNet32Combine(num_class)
+#     config = config_resnet
+
+# else:
+#     raise NameError
+
+config = config_tree_resnet
+net1 = CifarResNet32(num_class)
+net2 = TreeCifarResNet32_v1(num_class)
+
 if device == 'cuda':
-    net = torch.nn.DataParallel(net)
+    print('Using cuda')
+    net1 = torch.nn.DataParallel(net1)
+    net2 = torch.nn.DataParallel(net2)
     cudnn.benchmark = False
     cudnn.deterministic = True
     torch.manual_seed(0)
 
+
+# if args.ckpt is not '':
+    # net.load_state_dict(torch.load(args.ckpt))
+
+net1.load_state_dict(torch.load('./checkpoints/resnet32replace.pth'))
+net2.load_state_dict(torch.load('./checkpoints/tree_resnet32-replace.pth'))
+
+# net.module.init_modules()
+net1 = net1.to(device)
+net2 = net2.to(device)
 criterion = nn.CrossEntropyLoss()
-optimizer = optim.SGD(net.parameters(), lr=args.lr,
+optimizer = optim.SGD(net1.parameters(), lr=args.lr,
                       momentum=0.9, weight_decay=config.weight_decay)
 
 trainloader = torch.utils.data.DataLoader(
@@ -93,31 +112,35 @@ trainloader = torch.utils.data.DataLoader(
 testloader = torch.utils.data.DataLoader(
     testset, batch_size=config.batch_size*args.gpus, shuffle=False, num_workers=8)
 
-scheduler = None
-if args.model == 'vgg16':
-    print('Setting scheduler as consine tactic')
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config.epoch)
+if using_wanbd:
+    import wandb
+    wandb.init(project="combine")
+    wandb.watch(net1,log="all")
+
 
 def adjust_lr(epoch):
-    if scheduler is not None:
-        scheduler.step()
-    else:
-        if epoch in config.down_epoch:
-            for param_group in optimizer.param_groups:
-                param_group['lr'] /= 10
+    if epoch in args.down_epoch:
+        for param_group in optimizer.param_groups:
+            param_group['lr'] /= 10
 
 # Training
-def train(epoch):
-
-    print('\nEpoch: %d' % epoch)
+def train(epoch, net):
+    GREEN = '\033[92m'
+    RED = '\033[93m'
     net.train()
     train_loss = 0
     correct = 0
     total = 0
+    # freeze = True if epoch < args.freeze_before else False
+    freeze = False
+    color = GREEN if freeze else RED
+    e = '\nEpoch: %d  ' % epoch
+    print(e + color + ('Freeze' if freeze else 'Not Freeze') + '\033[0m')
     for batch_idx, (inputs, targets) in enumerate(trainloader):
         inputs, targets = inputs.to(device), targets.to(device)
         optimizer.zero_grad()
         outputs = net(inputs)
+        # outputs = net(inputs, freeze=freeze)
         loss = criterion(outputs, targets)
         loss.backward()
         optimizer.step()
@@ -127,8 +150,10 @@ def train(epoch):
         total += targets.size(0)
         correct += predicted.eq(targets).sum().item()
     print('train acc:',correct/total*100)
+    if using_wanbd:
+        wandb.log({'train acc':correct/total*100})
 
-def test(epoch):
+def test(epoch, net):
     global best_acc
     net.eval()
     test_loss = 0
@@ -147,21 +172,35 @@ def test(epoch):
 
     print('test_loss:',test_loss)
     print('test Acc:', correct/total*100)
+    if using_wanbd:
+        wandb.log({'test acc':correct/total*100})
     # Save checkpoint.
     acc = 100.*correct/total
     if acc > best_acc:
         print('best..')
         best_acc = acc
-        torch.save(net.state_dict(), "./checkpoints/" + str(args.model) + "replace.pth")
+    #     torch.save(net.state_dict(), "./checkpoints/" + str(args.model) + "-{}-best.pth".format(args.tactic))
 
 
-for epoch in range(start_epoch, start_epoch+config.epoch):
-    start_t = time.time()
-    train(epoch)
-    adjust_lr(epoch+2)
-    if epoch<5:
-        print('train time:',time.time()-start_t)
-    test(epoch)
-    if epoch<5:
-        print('train and test time',time.time()-start_t)
-print('Finished, best acc',best_acc)
+# for epoch in range(start_epoch, start_epoch+args.epoch):
+#     start_t = time.time()
+#     adjust_lr(epoch)
+#     train(epoch)
+#     if epoch<5:
+#         print('train time:',time.time()-start_t)
+#     test(epoch)
+#     if epoch<5:
+#         print('train and test time',time.time()-start_t)
+# print('Finished, best acc',best_acc)
+
+
+if __name__ == '__main__':
+    net1.module.bn1 = net2.module.bn1
+    net1.module.conv1 = net2.module.conv1
+    net1.module.layer1 = net2.module.layer1[0]
+    for epoch in range(args.epoch):
+        train(epoch, net1)
+        test(0, net1)
+        adjust_lr(epoch+2)
+    print('Finished, best acc',best_acc)
+    # test_tree(net2)
