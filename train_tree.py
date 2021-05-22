@@ -120,6 +120,9 @@ elif args.model == 'tree_resnet110':
 elif args.model == 'tree_vgg16':
     net = TreeVGG(num_class)
     config = config_tree_vgg
+elif args.model == 'tree_vgg19':
+    net = TreeVGG19(num_class)
+    config = config_tree_vgg
 else:
     raise NameError
 
