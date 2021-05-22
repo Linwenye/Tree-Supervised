@@ -21,7 +21,7 @@ cudnn.benchmark = True
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 parser = argparse.ArgumentParser(description='Self-Distillation CIFAR Training')
-parser.add_argument('--model', default="tree_resnet32", type=str, help="tree_resnet32|tree_wide|tree_mobilev3")
+parser.add_argument('--model', default="tree_mobilev3", type=str, help="tree_resnet32|tree_wide|tree_mobilev3")
 parser.add_argument('--dataset', default="cifar100", type=str, help="cifar100|cifar10")
 parser.add_argument('--epoch', default=200, type=int, help="training epochs")
 parser.add_argument('--loss_coefficient', default=0.3, type=float)
@@ -34,7 +34,7 @@ parser.add_argument('--autoaugment', default=False, type=bool)
 parser.add_argument('--temperature', default=3.0, type=float)
 parser.add_argument('--gpus', default=1, type=int)
 parser.add_argument('--init_lr', default=0.1, type=float)
-
+parser.add_argument('--wd', default=-1, type=float)
 # schedule
 parser.add_argument('--schedule', default='step', type=str, help='step|cos')
 args = parser.parse_args()
@@ -107,12 +107,18 @@ if args.model == 'tree_wide':
     config = config_wide_resnet
 elif args.model == 'tree_mobilev3':
     net = TreeMobileNetV3_Large(num_class)
-    config = config_tree_mobilev3
+    config = config_mobilev3
 elif args.model == 'tree_mobilev2':
     net = TreeMobileNetV2(num_class)
     config = config_tree_mobilev3
 elif args.model == 'tree_resnet32':
     net = TreeCifarResNet32_v1(num_class)
+    config = config_tree_resnet
+elif args.model == 'tree_resnet18':
+    net = TreeResNet18(num_class)
+    config = config_tree_resnet
+elif args.model == 'tree_resnet50':
+    net = TreeResNet50(num_class)
     config = config_tree_resnet
 elif args.model == 'tree_resnet110':
     net = TreeCifarResNet110_v1(num_class)
@@ -269,4 +275,7 @@ if __name__ == "__main__":
         if epoch < 5:
             print('train and test time:', time.time() - start_t)
     print("Training Finished, TotalEPOCH=%d, Best Accuracy=%.4f, Best Single=%.4f" % (
-        args.epoch, 100 * best_acc, 100 * best_single))
+            config.epoch, 100 * best_acc, 100 * best_single))
+    with open('tree.log', 'a') as f:
+        f.write("Training Finished, TotalEPOCH=%d, Best Accuracy=%.4f, Best Single=%.4f" % (
+            args.epoch, 100 * best_acc, 100 * best_single))

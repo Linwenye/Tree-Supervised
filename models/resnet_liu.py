@@ -152,6 +152,7 @@ class ResNet(nn.Module):
             ),
             nn.AvgPool2d(4, 4)
         )
+
         self.scala4 = nn.AvgPool2d(4, 4)
 
         self.attention1 = nn.Sequential(
@@ -634,6 +635,9 @@ class CifarResNet(nn.Module):
         else:
             self.conv1 = nn.Conv2d(image_channels, 16, kernel_size=3, stride=1, padding=1, bias=True)
             self.bn1 = nn.Sequential()
+        self.block = block
+        self.num_blocks = num_blocks
+        self.image_channels = image_channels
         self.layer1 = self._make_layer(block, 16, num_blocks[0], stride=1)
         self.layer2 = self._make_layer(block, 32, num_blocks[1], stride=2)
         self.layer3 = self._make_layer(block, 64, num_blocks[2], stride=2)
@@ -647,15 +651,137 @@ class CifarResNet(nn.Module):
             self.in_planes = planes * block.expansion
         return nn.Sequential(*layers)
 
+    def init_modules(self):
+        self.in_planes = 16
+        self.conv1 = nn.Conv2d(self.image_channels, 16, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(16)
+        self.layer1 = self._make_layer(self.block, 16, self.num_blocks[0], stride=1)
+        self.layer2 = self._make_layer(self.block, 32, self.num_blocks[1], stride=2)
+        self.layer3 = self._make_layer(self.block, 64, self.num_blocks[2], stride=2)
+
     def forward(self, x):
         out = F.relu(self.bn1(self.conv1(x)))
         out = self.layer1(out)
-        out = self.layer2(out)
+        with torch.no_grad():
+            out = self.layer2(out)
         out = self.layer3(out)
         out = F.avg_pool2d(out, 8)
         out = out.view(out.size(0), -1)
         out = self.linear(out)
         return out
+
+
+class TreeResNet18_(nn.Module):
+    def __init__(self, block, num_blocks, num_classes=10, image_channels=3, batchnorm=True):
+        """layer 1 as root version"""
+        super(TreeResNet18_, self).__init__()
+        if batchnorm:
+            self.conv1 = nn.Conv2d(image_channels, 64, kernel_size=3, stride=1, padding=1, bias=False)
+            self.bn1 = nn.BatchNorm2d(64)
+        else:
+            self.conv1 = nn.Conv2d(image_channels, 64, kernel_size=3, stride=1, padding=1, bias=True)
+            self.bn1 = nn.Sequential()
+        self.layer1 = nn.ModuleList(
+            [nn.Sequential(block(64, 64, 1))])
+        self.layer2 = nn.ModuleList(
+            [nn.Sequential(block(64, 64, 1),
+                           block(64, 128, 2),
+                           block(128, 128, 1)) for _ in range(2)])
+        self.layer3 = nn.ModuleList(
+            [nn.Sequential(block(128, 256, 2),
+                           block(256, 256, 1),
+                           block(256, 512, 2),
+                           block(512, 512, 1)) for _ in range(4)])
+
+        self.linears = nn.ModuleList([nn.Linear(512, num_classes) for _ in range(4)])
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            elif isinstance(m, (nn.BatchNorm2d, nn.GroupNorm)):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+
+    def _make_blocks(self, block, in_planes, out_planes, num_blocks, stride):
+        layers = []
+        layers.append(block(in_planes, out_planes, stride))
+        for i in range(num_blocks - 1):
+            layers.append(block(out_planes * block.expansion, out_planes, 1))
+        return nn.Sequential(*layers)
+
+    def forward(self, x):
+        out = F.relu(self.bn1(self.conv1(x)))
+        out = self.layer1[0](out)
+        out1 = self.layer2[0](out)
+        out3 = self.layer2[1](out)
+
+        out2 = self.layer3[1](out1)
+        out1 = self.layer3[0](out1)
+        out4 = self.layer3[3](out3)
+        out3 = self.layer3[2](out3)
+        # out = self.layer3(out)
+        res = [out1, out2, out3, out4]
+        for i in range(len(res)):
+            res[i] = F.avg_pool2d(res[i], 4)
+            res[i] = res[i].view(res[i].size(0), -1)
+            res[i] = self.linears[i](res[i])
+        return res
+
+
+class TreeResNet50_(nn.Module):
+    def __init__(self, block, num_blocks, num_classes=10, image_channels=3, batchnorm=True):
+        """layer 1 as root version"""
+        super(TreeResNet50_, self).__init__()
+        if batchnorm:
+            self.conv1 = nn.Conv2d(image_channels, 64, kernel_size=3, stride=1, padding=1, bias=False)
+            self.bn1 = nn.BatchNorm2d(64)
+        else:
+            self.conv1 = nn.Conv2d(image_channels, 64, kernel_size=3, stride=1, padding=1, bias=True)
+            self.bn1 = nn.Sequential()
+        self.layer1 = nn.ModuleList(
+            [nn.Sequential(block(64, 64, 1), block(64*block.expansion, 64, 1), block(64*block.expansion, 64, 1))])
+        self.layer2 = nn.ModuleList(
+            [nn.Sequential(block(64*block.expansion, 128, 2), block(128*block.expansion, 128, 1), block(128*block.expansion, 128, 1),
+                           block(128*block.expansion, 128, 1), block(128*block.expansion, 256, 2),
+                           block(256*block.expansion, 256, 1)) for _ in range(2)])
+        self.layer3 = nn.ModuleList(
+            [nn.Sequential(
+                block(256*block.expansion, 256, 1), block(256*block.expansion, 256, 1), block(256*block.expansion, 256, 1), block(256*block.expansion, 256, 1),
+                block(256*block.expansion, 512, 2),
+                block(512*block.expansion, 512, 1), block(512*block.expansion, 512, 1)) for _ in range(4)])
+
+        self.linears = nn.ModuleList([nn.Linear(512*block.expansion, num_classes) for _ in range(4)])
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            elif isinstance(m, (nn.BatchNorm2d, nn.GroupNorm)):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+
+    def _make_blocks(self, block, in_planes, out_planes, num_blocks, stride):
+        layers = []
+        layers.append(block(in_planes, out_planes, stride))
+        for i in range(num_blocks - 1):
+            layers.append(block(out_planes * block.expansion, out_planes, 1))
+        return nn.Sequential(*layers)
+
+    def forward(self, x):
+        out = F.relu(self.bn1(self.conv1(x)))
+        out = self.layer1[0](out)
+        out1 = self.layer2[0](out)
+        out3 = self.layer2[1](out)
+
+        out2 = self.layer3[1](out1)
+        out1 = self.layer3[0](out1)
+        out4 = self.layer3[3](out3)
+        out3 = self.layer3[2](out3)
+        # out = self.layer3(out)
+        res = [out1, out2, out3, out4]
+        for i in range(len(res)):
+            res[i] = F.avg_pool2d(res[i], 4)
+            res[i] = res[i].view(res[i].size(0), -1)
+            res[i] = self.linears[i](res[i])
+        return res
+
 
 
 def CifarResNet20(num_classes):
@@ -698,6 +824,14 @@ def TreeCifarResNet56_v1(num_classes):
 
 def TreeCifarResNet110_v1(num_classes):
     return TreeCifarResNet_v1(Bottleneck, [18, 18, 18], num_classes)
+
+
+def TreeResNet50(num_classes):
+    return TreeResNet50_(Bottleneck, [3, 4, 6, 3], num_classes)
+
+
+def TreeResNet18(num_classes):
+    return TreeResNet18_(BasicBlock, [2, 2, 2, 2], num_classes)
 
 
 def ResNet18(num_classes):

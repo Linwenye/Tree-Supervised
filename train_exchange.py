@@ -21,8 +21,8 @@ parser.add_argument('--model', default="tree_resnet32_combine", type=str, help="
 # parser.add_argument('--weight_decay', default=1e-4, type=float, help='5e-4| 1e-4')
 parser.add_argument('--gpus', default=1, type=int)
 parser.add_argument('--tactic', default=-1, type=int)
-parser.add_argument('--epoch', default=200, type=int, help="training epochs")
-parser.add_argument('--down_epoch', type=int, nargs='+', default=[100, 150, 180],
+parser.add_argument('--epoch', default=150, type=int, help="training epochs")
+parser.add_argument('--down_epoch', type=int, nargs='+', default=[50, 80],
                         help='Decrease learning rate at these epochs.')
 parser.add_argument('--freeze_before', default=200, type=int)
 args = parser.parse_args()
@@ -30,8 +30,8 @@ print(args)
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 best_acc = 0  # best test accuracy
 start_epoch = 0  # start from epoch 0 or last checkpoint epoch
-using_wanbd = False
-
+using_wanbd = True
+start_time = time.time()
 # Data
 print('==> Preparing data..')
 transform_train = transforms.Compose([
@@ -84,14 +84,17 @@ print('==> Building model..')
 config = config_tree_resnet
 net1 = CifarResNet32(num_class)
 net2 = TreeCifarResNet32_v1(num_class)
+net3 = TreeCifarResNet32_v1(num_class)
 
 if device == 'cuda':
     print('Using cuda')
     net1 = torch.nn.DataParallel(net1)
     net2 = torch.nn.DataParallel(net2)
+    net3 = torch.nn.DataParallel(net3)
     cudnn.benchmark = False
     cudnn.deterministic = True
     torch.manual_seed(0)
+    # torch.manual_seed(time.time())
 
 
 # if args.ckpt is not '':
@@ -99,11 +102,15 @@ if device == 'cuda':
 
 net1.load_state_dict(torch.load('./checkpoints/resnet32replace.pth'))
 net2.load_state_dict(torch.load('./checkpoints/tree_resnet32-replace.pth'))
+# net3.load_state_dict(torch.load('./checkpoints/tree_resnet32.pth'))
+net3.load_state_dict(torch.load('./checkpoints/tree_resnet32.pth'))
 
 # net.module.init_modules()
 net1 = net1.to(device)
 net2 = net2.to(device)
+net3 = net3.to(device)
 criterion = nn.CrossEntropyLoss()
+
 optimizer = optim.SGD(net1.parameters(), lr=args.lr,
                       momentum=0.9, weight_decay=config.weight_decay)
 
@@ -152,6 +159,7 @@ def train(epoch, net):
     print('train acc:',correct/total*100)
     if using_wanbd:
         wandb.log({'train acc':correct/total*100})
+    torch.save(net.state_dict(), 'checkpoints/exchange.last.pth')
 
 def test(epoch, net):
     global best_acc
@@ -195,12 +203,24 @@ def test(epoch, net):
 
 
 if __name__ == '__main__':
-    net1.module.bn1 = net2.module.bn1
-    net1.module.conv1 = net2.module.conv1
-    net1.module.layer1 = net2.module.layer1[0]
+
+    # net1.module.bn1 = net1.module.bn1
+    # net1.module.conv1 = net1.module.conv1
+    # net1.module.layer1 = net1.module.layer1[0]
+    # net1.module.bn1 = net1.module.bn1
+    # net1.module.conv1 = net1.module.conv1
+    # net1.module.layer1 = net1.module.layer1[0]
+    net1.module.init_modules()
+    net1.cuda()
+    # net1.module.layer2 = net2.module.layer2[0]
+    # net1.module.layer3 = net2.module.layer3[0]
+    # net1.module.linear = net2.module.linears[0]
+    test(0, net1)
     for epoch in range(args.epoch):
         train(epoch, net1)
         test(0, net1)
+        # input()
         adjust_lr(epoch+2)
     print('Finished, best acc',best_acc)
-    # test_tree(net2)
+    print('Time {:.2f} h'.format((time.time() - start_time) / 3600.))
+    # test_tree(net1)   

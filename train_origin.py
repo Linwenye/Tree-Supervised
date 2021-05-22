@@ -17,9 +17,11 @@ from configs import *
 parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
 parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
 parser.add_argument('--dataset', default="cifar100", type=str, help="cifar100|cifar10")
-parser.add_argument('--model', default="resnet32", type=str, help="resnet20|resnet32|mobilev3|wide")
+parser.add_argument('--model', default="mobilev3", type=str, help="resnet20|resnet32|mobilev3|wide")
 # parser.add_argument('--weight_decay', default=1e-4, type=float, help='5e-4| 1e-4')
 parser.add_argument('--gpus', default=4, type=int)
+parser.add_argument('--wd', default=-1, type=float)
+
 
 args = parser.parse_args()
 
@@ -86,7 +88,7 @@ if device == 'cuda':
 
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.SGD(net.parameters(), lr=args.lr,
-                      momentum=0.9, weight_decay=config.weight_decay)
+                      momentum=0.9, weight_decay=args.wd)
 
 trainloader = torch.utils.data.DataLoader(
     trainset, batch_size=config.batch_size*args.gpus, shuffle=True, num_workers=8)
@@ -164,4 +166,6 @@ for epoch in range(start_epoch, start_epoch+config.epoch):
     test(epoch)
     if epoch<5:
         print('train and test time',time.time()-start_t)
+with open('origin.log', 'a') as f:
+    f.write('{:.8f}\n'.format(best_acc))
 print('Finished, best acc',best_acc)
